@@ -25,11 +25,11 @@ class ExpenseGroup(BaseModel):
 class Regarding(BaseModel):
     name = models.CharField("Name", max_length=128)
     description = models.TextField("Description", null=True, blank=True)
-    start_date = models.DateField("Start Date", default=datetime.today())
+    start_date = models.DateField("Start Date", default=datetime.today().date())
     end_date = models.DateField("End Date", null=True)
     expense_group = models.ForeignKey("ExpenseGroup", related_name="regardings", on_delete=models.PROTECT)
     is_closed = models.BooleanField("Is closed?", default=False)
-    balance_json = models.JSONField("Balance Data", default=dict)
+    balance_json = models.JSONField("Balance Data", default=dict, null=True)
 
 
 class Wallet(BaseModel):
@@ -45,7 +45,7 @@ class PaymentMethod(BaseModel):
     description = models.TextField("Description", null=True, blank=True)
     wallet = models.ForeignKey("Wallet", related_name="payment_methods", on_delete=models.PROTECT)
     limit = models.DecimalField("Payment Limit Value", null=True, max_digits=14, decimal_places=4)
-    compensation_date = models.DateField("Payment Due Date", default=datetime.today())
+    compensation_date = models.DateField("Payment Due Date", default=datetime.today().date())
     is_active = models.BooleanField("Payment Method is active?", default=True)
 
 
@@ -66,7 +66,7 @@ class Expense(BaseModel):
     name = models.CharField("Name", max_length=128)
     description = models.TextField("Description", null=True, blank=True)
     regarding = models.ForeignKey("Regarding", related_name="expenses", on_delete=models.PROTECT)
-    date = models.DateField("Expense Date", default=datetime.today())
+    date = models.DateField("Expense Date", default=datetime.today().date())
     cost = models.DecimalField("Expense Cost", max_digits=14, decimal_places=4)
     validated_by = models.ManyToManyField("User", related_name="validated_expenses")
     is_validated = models.BooleanField("Is validated?", default=False)
