@@ -1,7 +1,7 @@
 from rest_framework import viewsets
 from core.models import ExpenseGroup, Regarding, Wallet, PaymentMethod, Payment, Expense, Tag, Item
 from core.serializers import ExpenseGroupSerializer, RegardingSerializer, WalletSerializer, PaymentMethodSerializer, PaymentSerializer, ExpenseSerializer, TagSerializer, ItemSerializer
-
+from core.services import stats
 
 class ExpenseGroupViewSet(viewsets.ModelViewSet):
     queryset = ExpenseGroup.objects.all()
@@ -32,6 +32,10 @@ class ExpenseViewSet(viewsets.ModelViewSet):
     queryset = Expense.objects.all()
     serializer_class = ExpenseSerializer
 
+    def list(self, request, *args, **kwargs):
+        stats.calc_totals_by_regarding(1)
+        return super(ExpenseViewSet, self).list(request, *args, **kwargs)
+
 
 class TagViewSet(viewsets.ModelViewSet):
     queryset = Tag.objects.all()
@@ -41,5 +45,6 @@ class TagViewSet(viewsets.ModelViewSet):
 class ItemViewSet(viewsets.ModelViewSet):
     queryset = Item.objects.all()
     serializer_class = ItemSerializer
+
 
 

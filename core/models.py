@@ -74,7 +74,7 @@ class Payment(BaseModel):
     payment_status = models.CharField("Payment Status", default=PaymentStatuses.AWAITING_VALIDATION, max_length=128, choices=PaymentStatuses.choices)
 
     def __str__(self):
-        return f"{self.expense} - {self.payer}"
+        return f"{self.expense.regarding.expense_group} - {self.expense.regarding.name} - {self.expense.name} - R${self.value} - {self.payer}"
 
 
 class Expense(BaseModel):

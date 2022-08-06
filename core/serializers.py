@@ -33,6 +33,7 @@ class PaymentSerializer(serializers.ModelSerializer):
 
 
 class ExpenseSerializer(serializers.ModelSerializer):
+    payments = PaymentSerializer(many=True)
     class Meta:
         model = Expense
         fields = "__all__"
@@ -45,7 +46,9 @@ class TagSerializer(serializers.ModelSerializer):
 
 
 class ItemSerializer(serializers.ModelSerializer):
+    expense = ExpenseSerializer()
     class Meta:
         model = Item
         fields = "__all__"
+
 
