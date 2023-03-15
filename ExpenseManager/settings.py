@@ -25,7 +25,16 @@ SECRET_KEY = "django-insecure-v0jm6@@@5f8b8av610l9f69go@54m#94a@)mo)myau8(1()r=6
 # SECURITY WARNING: don't run with debug turned on in production!
 DEBUG = config("DEBUG", cast=bool)
 
-ALLOWED_HOSTS = []
+ALLOWED_HOSTS = [
+    "127.0.0.1",
+    "localhost"
+]
+
+CORS_ALLOWED_ORIGINS = [
+'http://127.0.0.1:3000', #For React Project
+'http://localhost:3000',
+'http://127.0.0.1:8000'  #For Django Project
+]
 
 
 # Application definition
@@ -38,7 +47,8 @@ INSTALLED_APPS = [
     "django.contrib.messages",
     "django.contrib.staticfiles",
     "core",
-    "rest_framework"
+    "rest_framework",
+    "corsheaders"
 ]
 
 MIDDLEWARE = [
@@ -49,6 +59,7 @@ MIDDLEWARE = [
     "django.contrib.auth.middleware.AuthenticationMiddleware",
     "django.contrib.messages.middleware.MessageMiddleware",
     "django.middleware.clickjacking.XFrameOptionsMiddleware",
+    'corsheaders.middleware.CorsMiddleware',
 ]
 
 ROOT_URLCONF = "ExpenseManager.urls"
@@ -122,6 +133,18 @@ STATIC_URL = "static/"
 
 DEFAULT_AUTO_FIELD = "django.db.models.BigAutoField"
 AUTH_USER_MODEL = 'core.User'
+
 REST_FRAMEWORK = {
-    'DEFAULT_FILTER_BACKENDS': ['core.filters.BaseFilter']
+    'DEFAULT_FILTER_BACKENDS': ['core.filters.BaseFilter'],
+    #'DEFAULT_PAGINATION_CLASS': 'rest_framework.pagination.PageNumberPagination',
+    'PAGE_SIZE': 10,
+    'DEFAULT_RENDERER_CLASSES': [
+        'rest_framework.renderers.JSONRenderer',
+        'core.renderers.BrowsableAPIRendererWithoutForm',
+    ],
+    'DEFAULT_AUTHENTICATION_CLASSES': [
+        'rest_framework.authentication.SessionAuthentication',
+        #'knox.auth.TokenAuthentication'
+    ],
+    'DEFAULT_SCHEMA_CLASS': 'rest_framework.schemas.coreapi.AutoSchema'
 }
