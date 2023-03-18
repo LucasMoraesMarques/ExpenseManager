@@ -1,7 +1,7 @@
 from django.contrib.auth.models import AbstractUser
 from django.db import models
 from datetime import datetime
-
+import hashlib
 
 class User(AbstractUser):
     pass
@@ -20,9 +20,16 @@ class ExpenseGroup(BaseModel):
     description = models.TextField("Description", null=True, blank=True)
     members = models.ManyToManyField("User", related_name="expenses_groups")
     is_active = models.BooleanField("Is active?", default=True)
+    hash_id = models.CharField("Hash ID", max_length=16, blank=True, null=True)
 
     def __str__(self):
         return self.name
+
+    def save(self, *args, **kwargs):
+        if not self.hash_id:
+            self.hash_id = hashlib.sha1(bytes(f"{self.name}-{self.description}-{self.pk}", encoding="utf-8")).hexdigest()[:16]
+        super(ExpenseGroup, self).save(*args, **kwargs)
+
 
 
 class Regarding(BaseModel):
@@ -83,7 +90,7 @@ class Expense(BaseModel):
     regarding = models.ForeignKey("Regarding", related_name="expenses", on_delete=models.PROTECT)
     date = models.DateField("Expense Date", default=datetime.today().date())
     cost = models.DecimalField("Expense Cost", max_digits=14, decimal_places=4)
-    validated_by = models.ManyToManyField("User", related_name="validated_expenses")
+    validated_by = models.ManyToManyField("User", related_name="validated_expenses", blank=True, null=True)
     is_validated = models.BooleanField("Is validated?", default=False)
 
     def __str__(self):
@@ -101,9 +108,9 @@ class Tag(BaseModel):
 
 class Item(BaseModel):
     name = models.CharField("Name", max_length=128)
-    tags = models.ForeignKey("Tag", related_name="items", on_delete=models.PROTECT, null=True, blank=True)
+    tags = models.ForeignKey("Tag", related_name="items", on_delete=models.CASCADE, null=True, blank=True)
     price = models.DecimalField("Price", max_digits=14, decimal_places=4)
-    expense = models.ForeignKey("Expense", related_name="items", on_delete=models.PROTECT)
+    expense = models.ForeignKey("Expense", related_name="items", on_delete=models.CASCADE)
     consumers = models.ManyToManyField("User", related_name="items_purchased")
 
     def __str__(self):

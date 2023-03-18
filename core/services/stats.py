@@ -61,7 +61,8 @@ def calc_totals_by_regarding(regarding_id, items):
 
     for i, item in enumerate(totals_by_payer):
         payer = item["payments__payer"]
-        totals_by_payer[i].update(shared_and_individual[payer])
+        if payer:
+            totals_by_payer[i].update(shared_and_individual[payer])
 
 
     #print(totals_by_regarding)

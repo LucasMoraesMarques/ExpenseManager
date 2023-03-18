@@ -7,7 +7,7 @@ admin.site.register(User, UserAdmin)
 
 @admin.register(ExpenseGroup)
 class ExpenseGroupAdmin(admin.ModelAdmin):
-    pass
+    list_display = ("name", "description", "hash_id")
 
 
 @admin.register(Regarding)

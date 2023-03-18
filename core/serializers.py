@@ -5,7 +5,7 @@ from django.db.models import Sum
 from core.services import stats
 from babel.numbers import format_decimal
 from decimal import Decimal
-class ExpenseGroupSerializer(serializers.ModelSerializer):
+class ExpenseGroupSerializerReader(serializers.ModelSerializer):
     number_of_regardings = serializers.SerializerMethodField()
     number_of_expenses = serializers.SerializerMethodField()
 
@@ -29,7 +29,19 @@ class ExpenseGroupSerializer(serializers.ModelSerializer):
         return count
 
 
-class RegardingSerializer(serializers.ModelSerializer):
+class ExpenseGroupSerializerWriter(serializers.ModelSerializer):
+    class Meta:
+        model = ExpenseGroup
+        fields = ('name', 'description', 'members')
+
+
+class RegardingSerializerWriter(serializers.ModelSerializer):
+    class Meta:
+        model = Regarding
+        fields = "__all__"
+
+
+class RegardingSerializerReader(serializers.ModelSerializer):
     group_name = serializers.SerializerMethodField()
     general_total = serializers.SerializerMethodField()
     consumer_total = serializers.SerializerMethodField()
@@ -44,9 +56,35 @@ class RegardingSerializer(serializers.ModelSerializer):
 
     def get_general_total(self, obj):
         self.user = self.context["request"].user
-        items = ItemSerializer(Item.objects.filter(expense__regarding__id=obj.id), many=True).data
-        self.total_data, user_data, self.total_by_day = stats.calc_totals_by_regarding(obj.id, items)
-        self.personal_data = next(filter(lambda x: x["payments__payer"] == 1, user_data))
+        if obj.expenses.count():
+            items = ItemSerializer(Item.objects.filter(expense__regarding__id=obj.id), many=True).data
+            self.total_data, user_data, self.total_by_day = stats.calc_totals_by_regarding(obj.id, items)
+            self.personal_data = next(filter(lambda x: x["payments__payer"] == 1, user_data))
+        else:
+            self.total_data = {
+            "regarding": obj.id,
+            "total_expenses": 0,
+            "total_payments":0,
+            "total_validation": 0.0,
+            "total_open": 0,
+            "total_paid": 0,
+            "total_overdue": 0.0
+            }
+            self.personal_data = {
+            "payments__payer": 1,
+            "total_expenses": 0,
+            "total_payments": 0,
+            "total_validation": 0,
+            "total_open": 0,
+            "total_paid": 0,
+            "total_overdue": 00,
+            "shared": 0,
+            "partial_shared": 0,
+            "individual": 0,
+            "total_paid_shared": 0,
+            "balance": 0
+            }
+            self.total_by_day = {}
         return self.total_data
 
     def get_consumer_total(self, obj):
