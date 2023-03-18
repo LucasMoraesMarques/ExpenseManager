@@ -1,7 +1,7 @@
 from rest_framework import viewsets, response, status, views
 from core.models import ExpenseGroup, Regarding, Wallet, PaymentMethod, Payment, Expense, Tag, Item, User
-from core.serializers import ExpenseSerializer, RegardingSerializerWriter, RegardingSerializerReader, WalletSerializer, PaymentMethodSerializer, \
-    PaymentSerializer, ExpenseGroupSerializerWriter, ExpenseGroupSerializerReader, TagSerializer, ItemSerializer, UserSerializer
+from core.serializers import ExpenseSerializerReader, ExpenseSerializerWriter, RegardingSerializerWriter, RegardingSerializerReader, WalletSerializer, PaymentMethodSerializer, \
+    PaymentSerializerWriter, PaymentSerializerReader, ExpenseGroupSerializerWriter, ExpenseGroupSerializerReader, TagSerializer, ItemSerializerReader, ItemSerializerWriter, UserSerializer
 from core.services import stats
 
 class ExpenseGroupViewSet(viewsets.ModelViewSet):
@@ -46,13 +46,18 @@ class PaymentMethodViewSet(viewsets.ModelViewSet):
 
 class PaymentViewSet(viewsets.ModelViewSet):
     queryset = Payment.objects.all()
-    serializer_class = PaymentSerializer
+    serializer_class = PaymentSerializerReader
 
 
 class ExpenseViewSet(viewsets.ModelViewSet):
     queryset = Expense.objects.all()
-    serializer_class = ExpenseSerializer
-
+    serializer_class = ExpenseSerializerReader
+    def get_serializer_class(self):
+        method = self.request.method
+        if method == 'PATCH' or method == 'POST':
+            return ExpenseSerializerWriter
+        else:
+            return ExpenseSerializerReader
     def destroy(self, request, *args, **kwargs):
         if "ids" in request.query_params:
             ids = request.query_params.get('ids').split(',')
@@ -62,6 +67,34 @@ class ExpenseViewSet(viewsets.ModelViewSet):
             return response.Response(status=status.HTTP_204_NO_CONTENT)
         super().destroy(request, *args, **kwargs)
 
+    def create(self, request, *args, **kwargs):
+        print(request.data.keys())
+        expense_data = {**request.data}
+        expense_serializer = self.get_serializer(data=expense_data)
+        expense_serializer.is_valid(raise_exception=True)
+        self.perform_create(expense_serializer)
+        expense = Expense.objects.last()
+        print(expense)
+        items = []
+        for item in request.data.get("items"):
+            consumers = []
+            for consumer in item['consumers']:
+                consumers.append(consumer['id'])
+            item['consumers'] = consumers
+            item['expense'] = expense.id
+            items.append(item)
+        item_serializer = ItemSerializerWriter(data=items, many=True)
+        item_serializer.is_valid(raise_exception=True)
+        payments = []
+        for payment in request.data.get("payments"):
+            payments.append({**payment, "expense": expense.id, "payer": payment["payer"]["id"], "payment_method": payment["payment_method"]["id"]})
+        print("here")
+        payment_serializer = PaymentSerializerWriter(data=payments, many=True)
+        payment_serializer.is_valid(raise_exception=True)
+        item_serializer.save()
+        payment_serializer.save()
+        headers = self.get_success_headers(expense_serializer.data)
+        return response.Response(expense_serializer.data, status=status.HTTP_201_CREATED, headers=headers)
 
 class TagViewSet(viewsets.ModelViewSet):
     queryset = Tag.objects.all()
@@ -70,7 +103,7 @@ class TagViewSet(viewsets.ModelViewSet):
 
 class ItemViewSet(viewsets.ModelViewSet):
     queryset = Item.objects.all()
-    serializer_class = ItemSerializer
+    serializer_class = ItemSerializerReader
 
 
 class UserViewSet(viewsets.ModelViewSet):

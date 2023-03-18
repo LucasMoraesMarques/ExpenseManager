@@ -57,7 +57,7 @@ class RegardingSerializerReader(serializers.ModelSerializer):
     def get_general_total(self, obj):
         self.user = self.context["request"].user
         if obj.expenses.count():
-            items = ItemSerializer(Item.objects.filter(expense__regarding__id=obj.id), many=True).data
+            items = ItemSerializerReader(Item.objects.filter(expense__regarding__id=obj.id), many=True).data
             self.total_data, user_data, self.total_by_day = stats.calc_totals_by_regarding(obj.id, items)
             self.personal_data = next(filter(lambda x: x["payments__payer"] == 1, user_data))
         else:
@@ -114,7 +114,12 @@ class PaymentMethodSerializer(serializers.ModelSerializer):
         fields = "__all__"
 
 
-class PaymentSerializer(serializers.ModelSerializer):
+class PaymentSerializerWriter(serializers.ModelSerializer):
+    class Meta:
+        model = Payment
+        fields = "__all__"
+
+class PaymentSerializerReader(serializers.ModelSerializer):
     payer = serializers.PrimaryKeyRelatedField(read_only=True)
     payer_name = serializers.SerializerMethodField()
     class Meta:
@@ -151,9 +156,14 @@ class ItemSerializerForExpense(serializers.ModelSerializer):
             names += ', '
         return names[:-2]
 
+class ExpenseSerializerWriter(serializers.ModelSerializer):
+    class Meta:
+        model = Expense
+        fields = ("name", "description", "regarding", "cost", "date")
 
-class ExpenseSerializer(serializers.ModelSerializer):
-    payments = PaymentSerializer(many=True)
+
+class ExpenseSerializerReader(serializers.ModelSerializer):
+    payments = PaymentSerializerReader(many=True)
     items = ItemSerializerForExpense(many=True)
     regarding_name = serializers.SerializerMethodField()
     payment_status = serializers.SerializerMethodField()
@@ -184,7 +194,7 @@ class ExpenseSerializer(serializers.ModelSerializer):
             return "Pago"
 
     def get_shared_total(self, obj):
-        items = ItemSerializer(obj.items.all(), many=True).data
+        items = ItemSerializerReader(obj.items.all(), many=True).data
         individual = 0
         shared = 0
         members = obj.regarding.expense_group.members.all()
@@ -203,7 +213,7 @@ class ExpenseSerializer(serializers.ModelSerializer):
 
 
 class ExpenseSerializerForItem(serializers.ModelSerializer):
-    payments = PaymentSerializer(many=True)
+    payments = PaymentSerializerReader(many=True)
     class Meta:
         model = Expense
         fields = "__all__"
@@ -215,8 +225,14 @@ class TagSerializer(serializers.ModelSerializer):
         fields = "__all__"
 
 
-class ItemSerializer(serializers.ModelSerializer):
+class ItemSerializerReader(serializers.ModelSerializer):
     expense = ExpenseSerializerForItem()
+    class Meta:
+        model = Item
+        fields = "__all__"
+
+
+class ItemSerializerWriter(serializers.ModelSerializer):
     class Meta:
         model = Item
         fields = "__all__"

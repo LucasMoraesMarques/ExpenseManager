@@ -77,7 +77,7 @@ class Payment(BaseModel):
     payer = models.ForeignKey("User", related_name="paid_expenses", on_delete=models.PROTECT)
     payment_method = models.ForeignKey("PaymentMethod", related_name="payments", on_delete=models.PROTECT)
     value = models.DecimalField("Payment Value", max_digits=14, decimal_places=4)
-    expense = models.ForeignKey("Expense", related_name="payments", on_delete=models.PROTECT)
+    expense = models.ForeignKey("Expense", related_name="payments", on_delete=models.PROTECT, null=True, blank=True)
     payment_status = models.CharField("Payment Status", default=PaymentStatuses.AWAITING_VALIDATION, max_length=128, choices=PaymentStatuses.choices)
 
     def __str__(self):
@@ -110,7 +110,7 @@ class Item(BaseModel):
     name = models.CharField("Name", max_length=128)
     tags = models.ForeignKey("Tag", related_name="items", on_delete=models.CASCADE, null=True, blank=True)
     price = models.DecimalField("Price", max_digits=14, decimal_places=4)
-    expense = models.ForeignKey("Expense", related_name="items", on_delete=models.CASCADE)
+    expense = models.ForeignKey("Expense", related_name="items", on_delete=models.CASCADE, null=True, blank=True)
     consumers = models.ManyToManyField("User", related_name="items_purchased")
 
     def __str__(self):
