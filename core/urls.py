@@ -12,6 +12,8 @@ router.register("expenses", views.ExpenseViewSet)
 router.register("tags", views.TagViewSet)
 router.register("items", views.ItemViewSet)
 router.register("users", views.UserViewSet)
+router.register("notifications", views.NotificationViewSet)
+router.register("validations", views.ValidationViewSet)
 
 urlpatterns = router.urls
 

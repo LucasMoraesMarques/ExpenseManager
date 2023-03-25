@@ -1,5 +1,6 @@
 from rest_framework import serializers
-from core.models import ExpenseGroup, Regarding, Wallet, PaymentMethod, Payment, Expense, Tag, Item, User
+from core.models import ExpenseGroup, Regarding, Wallet, PaymentMethod, Payment, Expense, Tag, Item, \
+    User, Notification, Validation
 from datetime import datetime
 from django.db.models import Sum
 from core.services import stats
@@ -55,22 +56,16 @@ class RegardingSerializerReader(serializers.ModelSerializer):
         return obj.expense_group.name
 
     def get_general_total(self, obj):
-        self.user = self.context["request"].user
-        if obj.expenses.count():
-            items = ItemSerializerReader(Item.objects.filter(expense__regarding__id=obj.id), many=True).data
-            self.total_data, user_data, self.total_by_day = stats.calc_totals_by_regarding(obj.id, items)
-            self.personal_data = next(filter(lambda x: x["payments__payer"] == 1, user_data))
-        else:
-            self.total_data = {
+        self.total_data = {
             "regarding": obj.id,
             "total_expenses": 0,
-            "total_payments":0,
+            "total_payments": 0,
             "total_validation": 0.0,
             "total_open": 0,
             "total_paid": 0,
             "total_overdue": 0.0
-            }
-            self.personal_data = {
+        }
+        self.personal_data = {
             "payments__payer": 1,
             "total_expenses": 0,
             "total_payments": 0,
@@ -83,8 +78,15 @@ class RegardingSerializerReader(serializers.ModelSerializer):
             "individual": 0,
             "total_paid_shared": 0,
             "balance": 0
-            }
-            self.total_by_day = {}
+        }
+        self.total_by_day = {}
+        self.user = self.context["request"].user
+        if obj.expenses.count():
+            items = ItemSerializerReader(Item.objects.filter(expense__regarding__id=obj.id), many=True).data
+            self.total_data, user_data, self.total_by_day = stats.calc_totals_by_regarding(obj.id, items)
+            user_data = list(filter(lambda x: x["payments__payer"] == 1, user_data))
+            if user_data:
+                self.personal_data = user_data[0]
         return self.total_data
 
     def get_consumer_total(self, obj):
@@ -102,12 +104,6 @@ class RegardingSerializerReader(serializers.ModelSerializer):
 
 
 
-class WalletSerializer(serializers.ModelSerializer):
-    class Meta:
-        model = Wallet
-        fields = "__all__"
-
-
 class PaymentMethodSerializer(serializers.ModelSerializer):
     class Meta:
         model = PaymentMethod
@@ -120,7 +116,7 @@ class PaymentSerializerWriter(serializers.ModelSerializer):
         fields = "__all__"
 
 class PaymentSerializerReader(serializers.ModelSerializer):
-    payer = serializers.PrimaryKeyRelatedField(read_only=True)
+    payer = serializers.SerializerMethodField(read_only=True)
     payer_name = serializers.SerializerMethodField()
     class Meta:
         model = Payment
@@ -130,6 +126,9 @@ class PaymentSerializerReader(serializers.ModelSerializer):
     def get_payer_name(self, obj):
         return f"{obj.payer.first_name} {obj.payer.last_name}"
 
+    def get_payer(self, obj):
+        return {"id":obj.payer.id, "name": self.get_payer_name(obj)}
+
     def to_representation(self, instance):
         ret = super().to_representation(instance)
         ret['value'] = format_decimal(instance.value, locale="pt_BR", format="#.###,00")
@@ -138,9 +137,10 @@ class PaymentSerializerReader(serializers.ModelSerializer):
 
 class ItemSerializerForExpense(serializers.ModelSerializer):
     consumers_names = serializers.SerializerMethodField()
+    consumers = serializers.SerializerMethodField()
     class Meta:
         model = Item
-        fields = ["id", "name", "price", "expense", "consumers_names"]
+        fields = ["id", "name", "price", "expense", "consumers_names", "consumers", "created_at"]
 
     def to_representation(self, instance):
         ret = super().to_representation(instance)
@@ -155,6 +155,12 @@ class ItemSerializerForExpense(serializers.ModelSerializer):
                 names += " " + consumer.last_name
             names += ', '
         return names[:-2]
+
+    def get_consumers(self, obj):
+        data = []
+        for consumer in obj.consumers.all():
+            data.append({"id": consumer.id, "name": consumer.first_name + " " + consumer.last_name})
+        return data
 
 class ExpenseSerializerWriter(serializers.ModelSerializer):
     class Meta:
@@ -238,11 +244,48 @@ class ItemSerializerWriter(serializers.ModelSerializer):
         fields = "__all__"
 
 
+class WalletSerializer(serializers.ModelSerializer):
+    class Meta:
+        model = Wallet
+        fields = ("payment_methods",)
+        depth = 1
+
+
 class UserSerializer(serializers.ModelSerializer):
     full_name = serializers.SerializerMethodField()
+    wallet = WalletSerializer(read_only=True)
     class Meta:
         model = User
         fields = "__all__"
 
     def get_full_name(self, obj):
         return f"{obj.first_name} {obj.last_name}"
+
+
+class NotificationSerializer(serializers.ModelSerializer):
+    class Meta:
+        model = Notification
+        fields = "__all__"
+
+
+class ValidationSerializerReader(serializers.ModelSerializer):
+    requested_by = serializers.SerializerMethodField()
+    class Meta:
+        model = Validation
+        fields = "__all__"
+        depth = 1
+
+    def get_requested_by(self, obj):
+        creator = obj.expense.created_by
+        return creator.first_name + ' ' + creator.last_name
+
+    def to_representation(self, instance):
+        ret = super().to_representation(instance)
+        ret['created_at'] = instance.created_at.strftime("%d/%m/%Y")
+        return ret
+
+
+class ValidationSerializerWriter(serializers.ModelSerializer):
+    class Meta:
+        model = Validation
+        fields = "__all__"

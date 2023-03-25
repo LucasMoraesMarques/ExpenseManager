@@ -49,7 +49,7 @@ def calc_totals_by_regarding(regarding_id, items):
                 shared_and_individual[consumer]["shared"] += Decimal(item["price"])
             for payment in payments:
                 payer = payment['payer']
-                shared_and_individual[payer]['total_paid_shared'] += Decimal(item["price"])
+                shared_and_individual[payer['id']]['total_paid_shared'] += Decimal(item["price"])
         elif len(item["consumers"]) == 1:
             shared_and_individual[item["consumers"][0]]["individual"] += Decimal(item["price"])
         else:

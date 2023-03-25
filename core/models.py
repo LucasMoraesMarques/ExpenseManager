@@ -2,9 +2,23 @@ from django.contrib.auth.models import AbstractUser
 from django.db import models
 from datetime import datetime
 import hashlib
+from phonenumber_field.modelfields import PhoneNumberField
+
+STATES = ['AC', 'AL', 'AP', 'AM', 'BA', 'CE', 'DF', 'ES', 'GO', 'MA', 'MT', 'MS', 'MG', 'PA',
+    'PB', 'PR', 'PE', 'PI', 'RJ', 'RN', 'RS', 'RO', 'RR', 'SC', 'SP', 'SE', 'TO']
+
+STATES_CHOICES = [(state, state) for state in STATES]
 
 class User(AbstractUser):
-    pass
+    phone = PhoneNumberField('Phone Number', null=True, blank=True)
+    street = models.CharField("Street", max_length=128, null=True, blank=True)
+    district = models.CharField("District", max_length=128, null=True, blank=True)
+    address_number = models.IntegerField("Number", null=True, blank=True)
+    zip_code = models.CharField("Zip Code", max_length=8, blank=True)
+    city = models.CharField("City", max_length=128, null=True, blank=True)
+    state = models.CharField("State", max_length=2, null=True, choices=STATES_CHOICES, blank=True)
+    fcm_token = models.CharField("Firebase Token", max_length=255, blank=True, null=True)
+    google_id = models.CharField("Google Account Id", max_length=128, null=True, blank=True)
 
 
 class BaseModel(models.Model):
@@ -60,7 +74,7 @@ class PaymentMethod(BaseModel):
     type = models.TextField("Payment Type", choices=Types.choices)
     description = models.TextField("Description", null=True, blank=True)
     wallet = models.ForeignKey("Wallet", related_name="payment_methods", on_delete=models.PROTECT)
-    limit = models.DecimalField("Payment Limit Value", null=True, max_digits=14, decimal_places=4)
+    limit = models.DecimalField("Payment Limit Value", null=True, max_digits=14, decimal_places=4, blank=True)
     compensation_day = models.IntegerField("Payment Compensation Day", null=True, blank=True)
     is_active = models.BooleanField("Payment Method is active?", default=True)
 
@@ -90,8 +104,9 @@ class Expense(BaseModel):
     regarding = models.ForeignKey("Regarding", related_name="expenses", on_delete=models.PROTECT)
     date = models.DateField("Expense Date", default=datetime.today().date())
     cost = models.DecimalField("Expense Cost", max_digits=14, decimal_places=4)
-    validated_by = models.ManyToManyField("User", related_name="validated_expenses", blank=True, null=True)
+    validated_by = models.ManyToManyField("User", through="Validation", blank=True, null=True)
     is_validated = models.BooleanField("Is validated?", default=False)
+    created_by = models.ForeignKey("User", related_name="created_expenses", on_delete=models.PROTECT, blank=True, null=True)
 
     def __str__(self):
         return f"{self.regarding.expense_group} - {self.regarding.name} - {self.name} - R${self.cost:.2f}"
@@ -117,3 +132,15 @@ class Item(BaseModel):
         return f"{self.expense.regarding} - {self.expense.name} - {self.name} - R${self.price:.2f}"
 
 
+class Notification(BaseModel):
+    title = models.CharField("Notification Title", max_length=128)
+    body = models.TextField("Notification Body")
+    payload = models.JSONField("Notification Payload", null=True)
+    user = models.ForeignKey(User, on_delete=models.PROTECT, related_name="notifications")
+    was_sent = models.BooleanField("Notification sent?", default=False)
+    is_active = models.BooleanField("Is active?", default=True)
+
+class Validation(BaseModel):
+    validator = models.ForeignKey("User", on_delete=models.CASCADE, related_name="requested_validations")
+    expense = models.ForeignKey(Expense, on_delete=models.CASCADE, related_name="validations")
+    validated_at = models.DateField("Validation Date", null=True, blank=True)

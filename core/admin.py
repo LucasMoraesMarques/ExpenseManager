@@ -1,8 +1,7 @@
 from django.contrib import admin
 from django.contrib.auth.admin import UserAdmin
-from .models import User, ExpenseGroup, Regarding, Wallet, PaymentMethod, Payment, Expense, Tag, Item
+from .models import User, ExpenseGroup, Regarding, Wallet, PaymentMethod, Payment, Expense, Tag, Item, Validation, Notification
 
-admin.site.register(User, UserAdmin)
 
 
 @admin.register(ExpenseGroup)
@@ -42,4 +41,18 @@ class ItemAdmin(admin.ModelAdmin):
 
 @admin.register(Tag)
 class TagAdmin(admin.ModelAdmin):
+    pass
+
+
+@admin.register(User)
+class UserAdmin(admin.ModelAdmin):
+    pass
+
+@admin.register(Notification)
+class NotificationAdmin(admin.ModelAdmin):
+    pass
+
+
+@admin.register(Validation)
+class ValidationAdmin(admin.ModelAdmin):
     pass

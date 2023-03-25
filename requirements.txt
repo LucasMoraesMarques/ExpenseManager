@@ -6,3 +6,5 @@ pytz==2022.1
 sqlparse==0.4.2
 python-decouple==3.8
 psycopg2==2.9.5
+babel>=2.12.1
+django-cors-headers>=3.14.0
