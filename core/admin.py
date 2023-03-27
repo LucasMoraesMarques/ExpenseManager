@@ -1,12 +1,17 @@
 from django.contrib import admin
 from django.contrib.auth.admin import UserAdmin
-from .models import User, ExpenseGroup, Regarding, Wallet, PaymentMethod, Payment, Expense, Tag, Item, Validation, Notification
+from .models import User, ExpenseGroup, Regarding, Wallet, PaymentMethod, Payment, Expense, Tag, Item, Validation, \
+    Notification, Membership
 
 
 
 @admin.register(ExpenseGroup)
 class ExpenseGroupAdmin(admin.ModelAdmin):
     list_display = ("name", "description", "hash_id")
+
+@admin.register(Membership)
+class MembershipAdmin(admin.ModelAdmin):
+    pass
 
 
 @admin.register(Regarding)

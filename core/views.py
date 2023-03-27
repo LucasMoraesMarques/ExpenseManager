@@ -1,5 +1,6 @@
 from rest_framework import viewsets, response, status, views
-from core.models import ExpenseGroup, Regarding, Wallet, PaymentMethod, Payment, Expense, Tag, Item, User, Notification, Validation
+from core.models import ExpenseGroup, Regarding, Wallet, PaymentMethod, Payment, Expense, Tag, Item, User, Notification, \
+    Validation, Membership
 from core.serializers import ExpenseSerializerReader, ExpenseSerializerWriter, RegardingSerializerWriter, RegardingSerializerReader, WalletSerializer, PaymentMethodSerializer, \
     PaymentSerializerWriter, PaymentSerializerReader, ExpenseGroupSerializerWriter, ExpenseGroupSerializerReader, TagSerializer, ItemSerializerReader, ItemSerializerWriter, UserSerializer, \
     NotificationSerializer, ValidationSerializerWriter, ValidationSerializerReader
@@ -69,8 +70,8 @@ class ExpenseViewSet(viewsets.ModelViewSet):
         super().destroy(request, *args, **kwargs)
 
     def create(self, request, *args, **kwargs):
-        print(request.data.keys())
-        expense_data = {**request.data}
+        print(request.data)
+        expense_data = {**request.data, "created_by_id": 1}
         expense_data["cost"] = expense_data["cost"].replace(".", "").replace(",", ".")
         expense_serializer = self.get_serializer(data=expense_data)
         expense_serializer.is_valid(raise_exception=True)
@@ -98,6 +99,8 @@ class ExpenseViewSet(viewsets.ModelViewSet):
         payment_serializer.is_valid(raise_exception=True)
         item_serializer.save()
         payment_serializer.save()
+        for validator in expense_data['validators']:
+            Validation.objects.create(validator_id=validator['id'], expense_id=expense.id)
         headers = self.get_success_headers(expense_serializer.data)
         return response.Response(expense_serializer.data, status=status.HTTP_201_CREATED, headers=headers)
 
@@ -182,12 +185,21 @@ class UserViewSet(viewsets.ModelViewSet):
 class JoinGroup(views.APIView):
     authentication_classes = []
     def get(self, request, hash, format=None):
-        group = ExpenseGroup.objects.filter(hash_id=hash)
-        if group.exists():
-            group.first().members.add(User.objects.get(id=1))
-            return response.Response(status=status.HTTP_200_OK)
+        try:
+            group = ExpenseGroup.objects.get(hash_id=hash)
+            user = User.objects.get(id=1)
+            if group not in user.expenses_groups.all():
+                membership = Membership.objects.create(group=group, user=user)
+            else:
+                return response.Response(status=status.HTTP_400_BAD_REQUEST, data={"detail": "Você já faz parte desse grupo"})
+        except ExpenseGroup.DoesNotExist:
+            return response.Response(status=status.HTTP_404_NOT_FOUND, data={"detail": "Grupo não encontrado"})
+        except Exception as ex:
+            print(ex)
+            return response.Response(status=status.HTTP_500_INTERNAL_SERVER_ERROR, data={"detail": "Tivemos problemas ao adicioná-lo ao grupo. Tente novamente!"})
         else:
-            return response.Response(status=status.HTTP_404_NOT_FOUND)
+            return response.Response(status=status.HTTP_200_OK, data={"detail": "Você entrou no grupo!"})
+
 
 
 class NotificationViewSet(viewsets.ModelViewSet):

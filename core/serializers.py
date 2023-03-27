@@ -267,9 +267,16 @@ class NotificationSerializer(serializers.ModelSerializer):
         model = Notification
         fields = "__all__"
 
+    def to_representation(self, instance):
+        ret = super().to_representation(instance)
+        ret['created_at'] = instance.created_at.strftime("%d/%m/%Y")
+        return ret
+
 
 class ValidationSerializerReader(serializers.ModelSerializer):
     requested_by = serializers.SerializerMethodField()
+    is_validated = serializers.SerializerMethodField()
+
     class Meta:
         model = Validation
         fields = "__all__"
@@ -278,6 +285,11 @@ class ValidationSerializerReader(serializers.ModelSerializer):
     def get_requested_by(self, obj):
         creator = obj.expense.created_by
         return creator.first_name + ' ' + creator.last_name
+
+    def get_is_validated(self, obj):
+        if obj.validated_at:
+            return True
+        return False
 
     def to_representation(self, instance):
         ret = super().to_representation(instance)

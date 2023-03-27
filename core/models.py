@@ -32,7 +32,7 @@ class BaseModel(models.Model):
 class ExpenseGroup(BaseModel):
     name = models.CharField("Name", max_length=128)
     description = models.TextField("Description", null=True, blank=True)
-    members = models.ManyToManyField("User", related_name="expenses_groups")
+    members = models.ManyToManyField("User", through="Membership", related_name="expenses_groups")
     is_active = models.BooleanField("Is active?", default=True)
     hash_id = models.CharField("Hash ID", max_length=16, blank=True, null=True)
 
@@ -43,6 +43,13 @@ class ExpenseGroup(BaseModel):
         if not self.hash_id:
             self.hash_id = hashlib.sha1(bytes(f"{self.name}-{self.description}-{self.pk}", encoding="utf-8")).hexdigest()[:16]
         super(ExpenseGroup, self).save(*args, **kwargs)
+
+
+class Membership(models.Model):
+    group = models.ForeignKey("ExpenseGroup", on_delete=models.CASCADE)
+    user = models.ForeignKey("User", on_delete=models.CASCADE)
+    joined_at = models.DateField("Join date", auto_now_add=True)
+    average_weight = models.DecimalField("Weight for shared total", null=True, max_digits=7, decimal_places=4, blank=True, default=1)
 
 
 
@@ -135,7 +142,7 @@ class Item(BaseModel):
 class Notification(BaseModel):
     title = models.CharField("Notification Title", max_length=128)
     body = models.TextField("Notification Body")
-    payload = models.JSONField("Notification Payload", null=True)
+    payload = models.JSONField("Notification Payload", null=True, blank=True)
     user = models.ForeignKey(User, on_delete=models.PROTECT, related_name="notifications")
     was_sent = models.BooleanField("Notification sent?", default=False)
     is_active = models.BooleanField("Is active?", default=True)
@@ -143,4 +150,7 @@ class Notification(BaseModel):
 class Validation(BaseModel):
     validator = models.ForeignKey("User", on_delete=models.CASCADE, related_name="requested_validations")
     expense = models.ForeignKey(Expense, on_delete=models.CASCADE, related_name="validations")
+    note = models.TextField("Note", null=True, blank=True)
     validated_at = models.DateField("Validation Date", null=True, blank=True)
+    is_active = models.BooleanField("Is active?", default=True)
+
