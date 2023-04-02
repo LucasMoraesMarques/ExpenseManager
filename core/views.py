@@ -1,9 +1,10 @@
-from rest_framework import viewsets, response, status, views
+from rest_framework import viewsets, status, views
+from rest_framework.response import Response
 from core.models import ExpenseGroup, Regarding, Wallet, PaymentMethod, Payment, Expense, Tag, Item, User, Notification, \
-    Validation, Membership
+    Validation, Membership, ActionLog
 from core.serializers import ExpenseSerializerReader, ExpenseSerializerWriter, RegardingSerializerWriter, RegardingSerializerReader, WalletSerializer, PaymentMethodSerializer, \
     PaymentSerializerWriter, PaymentSerializerReader, ExpenseGroupSerializerWriter, ExpenseGroupSerializerReader, TagSerializer, ItemSerializerReader, ItemSerializerWriter, UserSerializer, \
-    NotificationSerializer, ValidationSerializerWriter, ValidationSerializerReader
+    NotificationSerializer, ValidationSerializerWriter, ValidationSerializerReader, ActionLogSerializer
 from core.services import stats
 
 class ExpenseGroupViewSet(viewsets.ModelViewSet):
@@ -22,6 +23,24 @@ class ExpenseGroupViewSet(viewsets.ModelViewSet):
         else:
             return ExpenseGroupSerializerReader
 
+    def create(self, request, *args, **kwargs):
+        response = super().create(request, *args, **kwargs)
+        if response.status_code == 201:
+            group = ExpenseGroup.objects.filter(name=request.data['name']).last()
+            ActionLog.objects.create(user_id=1, expense_group_id=group.id,
+                                     type=ActionLog.ActionTypes.CREATE,
+                                     description=f"Criou o grupo {group.name}")
+        return response
+
+    def update(self, request, *args, **kwargs):
+        response = super().update(request, *args, **kwargs)
+        if response.status_code == 200:
+            obj = ExpenseGroup.objects.get(pk=kwargs['pk'])
+            ActionLog.objects.create(user_id=1, expense_group_id=obj.id,
+                                     type=ActionLog.ActionTypes.UPDATE,
+                                     description=f"Atualizou o grupo {obj.name}")
+        return response
+
 
 
 class RegardingViewSet(viewsets.ModelViewSet):
@@ -35,7 +54,22 @@ class RegardingViewSet(viewsets.ModelViewSet):
         else:
             return RegardingSerializerReader
 
+    def create(self, request, *args, **kwargs):
+        response = super().create(request, *args, **kwargs)
+        if response.status_code == 201:
+            ActionLog.objects.create(user_id=1, expense_group_id=request.data['expense_group'],
+                                     type=ActionLog.ActionTypes.CREATE,
+                                     description=f"Criou a referência {request.data['name']}")
+        return response
 
+    def update(self, request, *args, **kwargs):
+        response = super().update(request, *args, **kwargs)
+        if response.status_code == 200:
+            obj = Regarding.objects.get(pk=kwargs['pk'])
+            ActionLog.objects.create(user_id=1, expense_group_id=obj.expense_group.id,
+                                     type=ActionLog.ActionTypes.UPDATE,
+                                     description=f"Atualizou a referência {obj.name}")
+        return response
 class WalletViewSet(viewsets.ModelViewSet):
     queryset = Wallet.objects.all()
     serializer_class = WalletSerializer
@@ -52,7 +86,7 @@ class PaymentViewSet(viewsets.ModelViewSet):
 
 
 class ExpenseViewSet(viewsets.ModelViewSet):
-    queryset = Expense.objects.all()
+    queryset = Expense.objects.all().order_by("date")
     serializer_class = ExpenseSerializerReader
     def get_serializer_class(self):
         method = self.request.method
@@ -63,19 +97,43 @@ class ExpenseViewSet(viewsets.ModelViewSet):
     def destroy(self, request, *args, **kwargs):
         if "ids" in request.query_params:
             ids = request.query_params.get('ids').split(',')
-            instances = Expense.objects.filter(id__in=ids)
+            instances = Expense.objects.filter(id__in=ids).select_related("regarding__expense_group")
+
+            delete_by_groups = {}
+            for instance in instances:
+                if instance.regarding.expense_group not in delete_by_groups.keys():
+                    delete_by_groups[instance.regarding.expense_group] = [instance.name]
+                else:
+                    delete_by_groups[instance.regarding.expense_group].append(instance.name)
+            print(delete_by_groups)
+            for group, deleted_expenses in delete_by_groups.items():
+                log_description = 'Deletou em massas as depesas '
+                for expense_name in deleted_expenses:
+                    log_description += expense_name + ', '
+                ActionLog.objects.create(user_id=1, expense_group_id=group.id, type=ActionLog.ActionTypes.DELETE, description=log_description)
             instances.delete()
             print(request.query_params.get('ids'))
-            return response.Response(status=status.HTTP_204_NO_CONTENT)
-        super().destroy(request, *args, **kwargs)
+            return Response(status=status.HTTP_204_NO_CONTENT)
+        expense = Expense.objects.get(pk=kwargs['pk'])
+        response = super().destroy(request, *args, **kwargs)
+        if response.status_code == 204:
+            ActionLog.objects.create(user_id=1, expense_group_id=expense.regarding.expense_group.id,
+                                     type=ActionLog.ActionTypes.DELETE,
+                                     description=f"Deletou a despesa {expense.name}")
+        return response
 
     def create(self, request, *args, **kwargs):
         print(request.data)
         expense_data = {**request.data, "created_by_id": 1}
         expense_data["cost"] = expense_data["cost"].replace(".", "").replace(",", ".")
+        expense_data['created_by'] = 1
         expense_serializer = self.get_serializer(data=expense_data)
         expense_serializer.is_valid(raise_exception=True)
         self.perform_create(expense_serializer)
+        regarding = Regarding.objects.get(id=expense_data['regarding'])
+        ActionLog.objects.create(user_id=1, expense_group_id=regarding.expense_group.id, type=ActionLog.ActionTypes.CREATE,
+                                 description=f"Criou a despesa {expense_data['name']} de valor R$ {expense_data['cost']}")
+
         expense = Expense.objects.last()
         print(expense)
         items = []
@@ -102,7 +160,7 @@ class ExpenseViewSet(viewsets.ModelViewSet):
         for validator in expense_data['validators']:
             Validation.objects.create(validator_id=validator['id'], expense_id=expense.id)
         headers = self.get_success_headers(expense_serializer.data)
-        return response.Response(expense_serializer.data, status=status.HTTP_201_CREATED, headers=headers)
+        return Response(expense_serializer.data, status=status.HTTP_201_CREATED, headers=headers)
 
     def partial_update(self, request, pk=None, *args, **kwargs):
         print(request.data)
@@ -112,6 +170,10 @@ class ExpenseViewSet(viewsets.ModelViewSet):
         expense_serializer = self.get_serializer(expense, data=expense_data, partial=True)
         expense_serializer.is_valid(raise_exception=True)
         expense_serializer.save()
+
+        ActionLog.objects.create(user_id=1, expense_group_id=expense.regarding.expense_group.id,
+                                 type=ActionLog.ActionTypes.UPDATE,
+                                 description=f"Atualizou a despesa {expense_data['name']}")
         print(expense)
         items_to_create = []
         items_to_update = []
@@ -165,7 +227,7 @@ class ExpenseViewSet(viewsets.ModelViewSet):
 
         print("here")
         headers = self.get_success_headers(expense_serializer.data)
-        return response.Response(expense_serializer.data, status=status.HTTP_200_OK, headers=headers)
+        return Response(expense_serializer.data, status=status.HTTP_200_OK, headers=headers)
 
 class TagViewSet(viewsets.ModelViewSet):
     queryset = Tag.objects.all()
@@ -191,14 +253,14 @@ class JoinGroup(views.APIView):
             if group not in user.expenses_groups.all():
                 membership = Membership.objects.create(group=group, user=user)
             else:
-                return response.Response(status=status.HTTP_400_BAD_REQUEST, data={"detail": "Você já faz parte desse grupo"})
+                return Response(status=status.HTTP_400_BAD_REQUEST, data={"detail": "Você já faz parte desse grupo"})
         except ExpenseGroup.DoesNotExist:
-            return response.Response(status=status.HTTP_404_NOT_FOUND, data={"detail": "Grupo não encontrado"})
+            return Response(status=status.HTTP_404_NOT_FOUND, data={"detail": "Grupo não encontrado"})
         except Exception as ex:
             print(ex)
-            return response.Response(status=status.HTTP_500_INTERNAL_SERVER_ERROR, data={"detail": "Tivemos problemas ao adicioná-lo ao grupo. Tente novamente!"})
+            return Response(status=status.HTTP_500_INTERNAL_SERVER_ERROR, data={"detail": "Tivemos problemas ao adicioná-lo ao grupo. Tente novamente!"})
         else:
-            return response.Response(status=status.HTTP_200_OK, data={"detail": "Você entrou no grupo!"})
+            return Response(status=status.HTTP_200_OK, data={"detail": "Você entrou no grupo!"})
 
 
 
@@ -217,3 +279,8 @@ class ValidationViewSet(viewsets.ModelViewSet):
             return ValidationSerializerWriter
         else:
             return ValidationSerializerReader
+
+
+class ActionsLogViewSet(viewsets.ModelViewSet):
+    queryset = ActionLog.objects.all()
+    serializer_class = ActionLogSerializer

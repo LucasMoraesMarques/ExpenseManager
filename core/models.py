@@ -46,8 +46,8 @@ class ExpenseGroup(BaseModel):
 
 
 class Membership(models.Model):
-    group = models.ForeignKey("ExpenseGroup", on_delete=models.CASCADE)
-    user = models.ForeignKey("User", on_delete=models.CASCADE)
+    group = models.ForeignKey("ExpenseGroup", related_name="memberships", on_delete=models.CASCADE)
+    user = models.ForeignKey("User", related_name="my_memberships", on_delete=models.CASCADE)
     joined_at = models.DateField("Join date", auto_now_add=True)
     average_weight = models.DecimalField("Weight for shared total", null=True, max_digits=7, decimal_places=4, blank=True, default=1)
 
@@ -58,7 +58,7 @@ class Regarding(BaseModel):
     description = models.TextField("Description", null=True, blank=True)
     start_date = models.DateField("Start Date", default=datetime.today().date())
     end_date = models.DateField("End Date", null=True)
-    expense_group = models.ForeignKey("ExpenseGroup", related_name="regardings", on_delete=models.PROTECT)
+    expense_group = models.ForeignKey("ExpenseGroup", related_name="regardings", on_delete=models.CASCADE)
     is_closed = models.BooleanField("Is closed?", default=False)
     balance_json = models.JSONField("Balance Data", default=dict, null=True)
 
@@ -67,7 +67,7 @@ class Regarding(BaseModel):
 
 
 class Wallet(BaseModel):
-    owner = models.OneToOneField("User", related_name="wallet", on_delete=models.PROTECT)
+    owner = models.OneToOneField("User", related_name="wallet", on_delete=models.CASCADE)
 
     def __str__(self):
         return f"{self.owner}"
@@ -80,7 +80,7 @@ class PaymentMethod(BaseModel):
         CASH = ("CASH", "DINHEIRO")
     type = models.TextField("Payment Type", choices=Types.choices)
     description = models.TextField("Description", null=True, blank=True)
-    wallet = models.ForeignKey("Wallet", related_name="payment_methods", on_delete=models.PROTECT)
+    wallet = models.ForeignKey("Wallet", related_name="payment_methods", on_delete=models.CASCADE)
     limit = models.DecimalField("Payment Limit Value", null=True, max_digits=14, decimal_places=4, blank=True)
     compensation_day = models.IntegerField("Payment Compensation Day", null=True, blank=True)
     is_active = models.BooleanField("Payment Method is active?", default=True)
@@ -95,10 +95,10 @@ class Payment(BaseModel):
         AWAITING_PAYMENT = ("AWAITING", "AGUARDANDO PAGAMENTO")
         PAID = ("PAID", "PAGO")
         OVERDUE = ("OVERDUE", "VENCIDO")
-    payer = models.ForeignKey("User", related_name="paid_expenses", on_delete=models.PROTECT)
-    payment_method = models.ForeignKey("PaymentMethod", related_name="payments", on_delete=models.PROTECT)
+    payer = models.ForeignKey("User", related_name="paid_expenses", on_delete=models.CASCADE)
+    payment_method = models.ForeignKey("PaymentMethod", related_name="payments", on_delete=models.CASCADE)
     value = models.DecimalField("Payment Value", max_digits=14, decimal_places=4)
-    expense = models.ForeignKey("Expense", related_name="payments", on_delete=models.PROTECT, null=True, blank=True)
+    expense = models.ForeignKey("Expense", related_name="payments", on_delete=models.CASCADE, null=True, blank=True)
     payment_status = models.CharField("Payment Status", default=PaymentStatuses.AWAITING_VALIDATION, max_length=128, choices=PaymentStatuses.choices)
 
     def __str__(self):
@@ -106,14 +106,18 @@ class Payment(BaseModel):
 
 
 class Expense(BaseModel):
+    class ValidationStatuses(models.TextChoices):
+        AWAITING = ("VALIDATION", "PENDENTE")
+        VALIDATED = ("VALIDATED", "VALIDADA")
+        REJECTED = ("REJECTED", "REJEITADA")
     name = models.CharField("Name", max_length=128)
     description = models.TextField("Description", null=True, blank=True)
-    regarding = models.ForeignKey("Regarding", related_name="expenses", on_delete=models.PROTECT)
+    regarding = models.ForeignKey("Regarding", related_name="expenses", on_delete=models.CASCADE)
     date = models.DateField("Expense Date", default=datetime.today().date())
     cost = models.DecimalField("Expense Cost", max_digits=14, decimal_places=4)
     validated_by = models.ManyToManyField("User", through="Validation", blank=True, null=True)
-    is_validated = models.BooleanField("Is validated?", default=False)
-    created_by = models.ForeignKey("User", related_name="created_expenses", on_delete=models.PROTECT, blank=True, null=True)
+    validation_status = models.CharField("Validation Status", default=ValidationStatuses.AWAITING, max_length=128, choices=ValidationStatuses.choices)
+    created_by = models.ForeignKey("User", related_name="created_expenses", on_delete=models.CASCADE, blank=True, null=True)
 
     def __str__(self):
         return f"{self.regarding.expense_group} - {self.regarding.name} - {self.name} - R${self.cost:.2f}"
@@ -121,7 +125,7 @@ class Expense(BaseModel):
 
 class Tag(BaseModel):
     name = models.CharField("Tag", max_length=128, default="Outros")
-    owner = models.ForeignKey("User", related_name="created_tags", on_delete=models.PROTECT)
+    owner = models.ForeignKey("User", related_name="created_tags", on_delete=models.CASCADE)
     expenses_groups = models.ManyToManyField("ExpenseGroup", related_name="items_tags")
 
     def __str__(self):
@@ -143,7 +147,7 @@ class Notification(BaseModel):
     title = models.CharField("Notification Title", max_length=128)
     body = models.TextField("Notification Body")
     payload = models.JSONField("Notification Payload", null=True, blank=True)
-    user = models.ForeignKey(User, on_delete=models.PROTECT, related_name="notifications")
+    user = models.ForeignKey(User, on_delete=models.CASCADE, related_name="notifications")
     was_sent = models.BooleanField("Notification sent?", default=False)
     is_active = models.BooleanField("Is active?", default=True)
 
@@ -154,3 +158,13 @@ class Validation(BaseModel):
     validated_at = models.DateField("Validation Date", null=True, blank=True)
     is_active = models.BooleanField("Is active?", default=True)
 
+
+class ActionLog(BaseModel):
+    class ActionTypes(models.TextChoices):
+        CREATE = ("CREATE", "CRIOU")
+        UPDATE = ("UPDATE", "EDITOU")
+        DELETE = ("DELETE", "DELETOU")
+    user = models.ForeignKey(User, on_delete=models.CASCADE, related_name="performed_actions")
+    expense_group = models.ForeignKey("ExpenseGroup", related_name="actions_log", on_delete=models.CASCADE)
+    type = models.CharField("Action type", default=ActionTypes.CREATE, max_length=128, choices=ActionTypes.choices)
+    description = models.TextField("Description", null=True, blank=True)

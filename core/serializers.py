@@ -1,11 +1,31 @@
 from rest_framework import serializers
 from core.models import ExpenseGroup, Regarding, Wallet, PaymentMethod, Payment, Expense, Tag, Item, \
-    User, Notification, Validation
+    User, Notification, Validation, ActionLog
 from datetime import datetime
 from django.db.models import Sum
 from core.services import stats
 from babel.numbers import format_decimal
 from decimal import Decimal
+
+
+class WalletSerializer(serializers.ModelSerializer):
+    class Meta:
+        model = Wallet
+        fields = ("payment_methods",)
+        depth = 1
+
+
+class UserSerializer(serializers.ModelSerializer):
+    full_name = serializers.SerializerMethodField()
+    wallet = WalletSerializer(read_only=True)
+    class Meta:
+        model = User
+        fields = "__all__"
+
+    def get_full_name(self, obj):
+        return f"{obj.first_name} {obj.last_name}"
+
+
 class ExpenseGroupSerializerReader(serializers.ModelSerializer):
     number_of_regardings = serializers.SerializerMethodField()
     number_of_expenses = serializers.SerializerMethodField()
@@ -47,6 +67,7 @@ class RegardingSerializerReader(serializers.ModelSerializer):
     general_total = serializers.SerializerMethodField()
     consumer_total = serializers.SerializerMethodField()
     total_by_day = serializers.SerializerMethodField()
+    total_member_vs_member = serializers.SerializerMethodField()
 
     class Meta:
         model = Regarding
@@ -83,7 +104,7 @@ class RegardingSerializerReader(serializers.ModelSerializer):
         self.user = self.context["request"].user
         if obj.expenses.count():
             items = ItemSerializerReader(Item.objects.filter(expense__regarding__id=obj.id), many=True).data
-            self.total_data, user_data, self.total_by_day = stats.calc_totals_by_regarding(obj.id, items)
+            self.total_data, user_data, self.total_by_day, self.total_member_vs_member = stats.calc_totals_by_regarding(obj.id, items)
             user_data = list(filter(lambda x: x["payments__payer"] == 1, user_data))
             if user_data:
                 self.personal_data = user_data[0]
@@ -94,6 +115,9 @@ class RegardingSerializerReader(serializers.ModelSerializer):
 
     def get_total_by_day(self, obj):
         return self.total_by_day
+
+    def get_total_member_vs_member(self, obj):
+        return self.total_member_vs_member
 
     def to_representation(self, instance):
         ret = super().to_representation(instance)
@@ -165,8 +189,46 @@ class ItemSerializerForExpense(serializers.ModelSerializer):
 class ExpenseSerializerWriter(serializers.ModelSerializer):
     class Meta:
         model = Expense
-        fields = ("name", "description", "regarding", "cost", "date")
+        fields = ("name", "description", "regarding", "cost", "date", "created_by")
 
+class ValidationSerializerReader(serializers.ModelSerializer):
+    requested_by = serializers.SerializerMethodField()
+    is_validated = serializers.SerializerMethodField()
+    validator = UserSerializer()
+    status = serializers.SerializerMethodField()
+
+    class Meta:
+        model = Validation
+        fields = "__all__"
+        depth = 1
+
+    def get_requested_by(self, obj):
+        creator = obj.expense.created_by
+        return creator.first_name + ' ' + creator.last_name
+
+    def get_is_validated(self, obj):
+        if obj.validated_at:
+            return True
+        return False
+
+    def to_representation(self, instance):
+        ret = super().to_representation(instance)
+        ret['created_at'] = instance.created_at.strftime("%d/%m/%Y")
+        return ret
+
+    def get_status(self, obj):
+        if obj.is_active:
+            return "AGUARDANDO"
+        elif self.get_is_validated(obj):
+            return "VALIDOU"
+        else:
+            return "REJEITOU"
+
+
+class ValidationSerializerWriter(serializers.ModelSerializer):
+    class Meta:
+        model = Validation
+        fields = "__all__"
 
 class ExpenseSerializerReader(serializers.ModelSerializer):
     payments = PaymentSerializerReader(many=True)
@@ -175,6 +237,8 @@ class ExpenseSerializerReader(serializers.ModelSerializer):
     payment_status = serializers.SerializerMethodField()
     shared_total = serializers.SerializerMethodField()
     individual_total = serializers.SerializerMethodField()
+    validations = ValidationSerializerReader(many=True)
+    validation_status = serializers.SerializerMethodField()
     class Meta:
         model = Expense
         fields = "__all__"
@@ -198,6 +262,14 @@ class ExpenseSerializerReader(serializers.ModelSerializer):
             return "Vencido"
         elif "PAID" in payments_statuses:
             return "Pago"
+
+    def get_validation_status(self, obj):
+        if obj.validation_status == Expense.ValidationStatuses.AWAITING:
+            return "Pendente"
+        elif obj.validation_status == Expense.ValidationStatuses.VALIDATED:
+            return "Validada"
+        elif obj.validation_status == Expense.ValidationStatuses.REJECTED:
+            return "Rejeitada"
 
     def get_shared_total(self, obj):
         items = ItemSerializerReader(obj.items.all(), many=True).data
@@ -244,24 +316,6 @@ class ItemSerializerWriter(serializers.ModelSerializer):
         fields = "__all__"
 
 
-class WalletSerializer(serializers.ModelSerializer):
-    class Meta:
-        model = Wallet
-        fields = ("payment_methods",)
-        depth = 1
-
-
-class UserSerializer(serializers.ModelSerializer):
-    full_name = serializers.SerializerMethodField()
-    wallet = WalletSerializer(read_only=True)
-    class Meta:
-        model = User
-        fields = "__all__"
-
-    def get_full_name(self, obj):
-        return f"{obj.first_name} {obj.last_name}"
-
-
 class NotificationSerializer(serializers.ModelSerializer):
     class Meta:
         model = Notification
@@ -273,31 +327,13 @@ class NotificationSerializer(serializers.ModelSerializer):
         return ret
 
 
-class ValidationSerializerReader(serializers.ModelSerializer):
-    requested_by = serializers.SerializerMethodField()
-    is_validated = serializers.SerializerMethodField()
-
+class ActionLogSerializer(serializers.ModelSerializer):
+    user = UserSerializer()
     class Meta:
-        model = Validation
+        model = ActionLog
         fields = "__all__"
-        depth = 1
-
-    def get_requested_by(self, obj):
-        creator = obj.expense.created_by
-        return creator.first_name + ' ' + creator.last_name
-
-    def get_is_validated(self, obj):
-        if obj.validated_at:
-            return True
-        return False
 
     def to_representation(self, instance):
         ret = super().to_representation(instance)
         ret['created_at'] = instance.created_at.strftime("%d/%m/%Y")
         return ret
-
-
-class ValidationSerializerWriter(serializers.ModelSerializer):
-    class Meta:
-        model = Validation
-        fields = "__all__"

@@ -1,7 +1,7 @@
 from django.contrib import admin
 from django.contrib.auth.admin import UserAdmin
 from .models import User, ExpenseGroup, Regarding, Wallet, PaymentMethod, Payment, Expense, Tag, Item, Validation, \
-    Notification, Membership
+    Notification, Membership, ActionLog
 
 
 
@@ -36,7 +36,11 @@ class PaymentAdmin(admin.ModelAdmin):
 
 @admin.register(Expense)
 class ExpenseAdmin(admin.ModelAdmin):
-    pass
+    list_display = ['__str__', 'payer']
+
+
+    def payer(self, obj):
+        return obj.payments.first().payer.username
 
 
 @admin.register(Item)
@@ -60,4 +64,9 @@ class NotificationAdmin(admin.ModelAdmin):
 
 @admin.register(Validation)
 class ValidationAdmin(admin.ModelAdmin):
+    pass
+
+
+@admin.register(ActionLog)
+class ActionLogAdmin(admin.ModelAdmin):
     pass

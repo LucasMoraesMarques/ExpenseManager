@@ -14,6 +14,7 @@ router.register("items", views.ItemViewSet)
 router.register("users", views.UserViewSet)
 router.register("notifications", views.NotificationViewSet)
 router.register("validations", views.ValidationViewSet)
+router.register("actions-log", views.ActionsLogViewSet)
 
 urlpatterns = router.urls
 
