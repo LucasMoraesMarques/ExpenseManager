@@ -271,7 +271,7 @@ class ExpenseSerializerReader(serializers.ModelSerializer):
         elif obj.validation_status == Expense.ValidationStatuses.REJECTED:
             return "Rejeitada"
 
-    def get_shared_total(self, obj):
+    def get_shared_total(self, obj):  # Bug no individual
         items = ItemSerializerReader(obj.items.all(), many=True).data
         individual = 0
         shared = 0
@@ -280,7 +280,7 @@ class ExpenseSerializerReader(serializers.ModelSerializer):
         for item in items:
             if set(item["consumers"]) == set(members_ids):
                 shared += Decimal(item["price"])
-            elif len(item["consumers"]) == 1:
+            elif len(item["consumers"]) == 1 and item["consumers"][0] == self.context["request"].user.id:
                 individual += Decimal(item["price"])
         self.shared = shared
         self.individual = individual
@@ -336,4 +336,5 @@ class ActionLogSerializer(serializers.ModelSerializer):
     def to_representation(self, instance):
         ret = super().to_representation(instance)
         ret['created_at'] = instance.created_at.strftime("%d/%m/%Y")
+        ret['expense_group'] = instance.expense_group.name
         return ret

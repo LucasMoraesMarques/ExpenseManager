@@ -168,3 +168,4 @@ class ActionLog(BaseModel):
     expense_group = models.ForeignKey("ExpenseGroup", related_name="actions_log", on_delete=models.CASCADE)
     type = models.CharField("Action type", default=ActionTypes.CREATE, max_length=128, choices=ActionTypes.choices)
     description = models.TextField("Description", null=True, blank=True)
+    changes_json = models.JSONField("Changes JSON", default=dict, null=True, blank=True)

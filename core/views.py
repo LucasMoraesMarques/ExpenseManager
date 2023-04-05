@@ -33,12 +33,46 @@ class ExpenseGroupViewSet(viewsets.ModelViewSet):
         return response
 
     def update(self, request, *args, **kwargs):
+        obj = ExpenseGroup.objects.get(pk=kwargs['pk'])
         response = super().update(request, *args, **kwargs)
         if response.status_code == 200:
-            obj = ExpenseGroup.objects.get(pk=kwargs['pk'])
+            changes = {}
+            print(request.data)
+            for field in request.data.keys():
+                if field in ['name', 'description']:
+                    readable_name = 'nome' if field == 'name' else 'descrição'
+                    if (old := getattr(obj, field)) != (new := request.data.get(field)):
+                        print(old, new)
+                        changes[field] = f"Mudou o {readable_name} de '{old}' para '{new}'"
+                elif field == 'members':
+                    old_members = set(obj.members.values_list("id", flat=True))
+                    new_members = set(request.data.get(field))
+                    if old_members != new_members:
+                        changes["members"] = ''
+                        removed_members = old_members.difference(new_members)
+                        new_members = new_members.difference(old_members)
+                        removed_members = User.objects.filter(id__in=removed_members)
+                        new_members = User.objects.filter(id__in=new_members)
+                        removed_members_data = UserSerializer(removed_members, many=True).data
+                        new_members_data = UserSerializer(new_members, many=True).data
+
+                        if removed_members:
+                            changes['members'] = "Removeu o(s) membro(s) "
+                            for member in removed_members_data:
+                                changes['members'] += member['full_name'] + ', '
+                            changes['members'] = changes['members'][:-2] + '.'
+                        if new_members:
+                            changes['members'] = "Adicionou o(s) membro(s) "
+                            for member in new_members_data:
+                                changes['members'] += member['full_name'] + ', '
+                            changes['members'] = changes['members'][:-2] + '.'
+
+
+            print(changes)
             ActionLog.objects.create(user_id=1, expense_group_id=obj.id,
                                      type=ActionLog.ActionTypes.UPDATE,
-                                     description=f"Atualizou o grupo {obj.name}")
+                                     description=f"Atualizou o grupo {obj.name}",
+                                     changes_json=changes)
         return response
 
 
@@ -284,3 +318,8 @@ class ValidationViewSet(viewsets.ModelViewSet):
 class ActionsLogViewSet(viewsets.ModelViewSet):
     queryset = ActionLog.objects.all()
     serializer_class = ActionLogSerializer
+
+    def get_queryset(self):
+        #self.queryset = self.queryset.filter(user=self.request.user)
+        self.queryset = self.queryset.order_by("-created_at")
+        return self.queryset

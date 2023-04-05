@@ -86,7 +86,7 @@ def calc_totals_by_regarding(regarding_id, items):
         expected_total_paid = data["shared"]*member_weight / group_weighed_n
         shared_and_individual[payer]['expected_total_paid'] = expected_total_paid
         print(total_paid_shared, expected_total_paid)
-        shared_and_individual[payer]["balance"] = round(total_paid_shared - expected_total_paid, 4)
+        shared_and_individual[payer]["balance"] = round(total_paid_shared - expected_total_paid, 2)
 
     for i, item in enumerate(totals_by_payer):
         payer = item["payments__payer"]
@@ -112,7 +112,7 @@ def calc_totals_by_regarding(regarding_id, items):
         total_member_vs_member_with_names[x_member_name_x] = {}
         for y_member_id in debts_data.keys():
             y_member_name_x = memberships.get(user__id=y_member_id).full_name
-            total_member_vs_member_with_names[x_member_name_x][y_member_name_x] = debts_data[y_member_id]
+            total_member_vs_member_with_names[x_member_name_x][y_member_name_x] = round(debts_data[y_member_id], 2)
 
     print(total_member_vs_member2)
     print(total_member_vs_member_with_names)
