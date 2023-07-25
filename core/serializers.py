@@ -335,6 +335,6 @@ class ActionLogSerializer(serializers.ModelSerializer):
 
     def to_representation(self, instance):
         ret = super().to_representation(instance)
-        ret['created_at'] = instance.created_at.strftime("%d/%m/%Y")
+        ret['created_at'] = instance.created_at.strftime("%d/%m/%Y %H:%M")
         ret['expense_group'] = instance.expense_group.name
         return ret

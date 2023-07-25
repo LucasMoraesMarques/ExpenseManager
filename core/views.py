@@ -1,12 +1,26 @@
-from rest_framework import viewsets, status, views
+import datetime
+
+from rest_framework import viewsets, status, views, permissions
 from rest_framework.response import Response
 from core.models import ExpenseGroup, Regarding, Wallet, PaymentMethod, Payment, Expense, Tag, Item, User, Notification, \
     Validation, Membership, ActionLog
 from core.serializers import ExpenseSerializerReader, ExpenseSerializerWriter, RegardingSerializerWriter, RegardingSerializerReader, WalletSerializer, PaymentMethodSerializer, \
     PaymentSerializerWriter, PaymentSerializerReader, ExpenseGroupSerializerWriter, ExpenseGroupSerializerReader, TagSerializer, ItemSerializerReader, ItemSerializerWriter, UserSerializer, \
     NotificationSerializer, ValidationSerializerWriter, ValidationSerializerReader, ActionLogSerializer
-from core.services import stats
+from django.contrib.auth import authenticate
+from django.db.models import F, Q
+from knox.models import AuthToken
+from datetime import datetime, timedelta
 
+FIELDS_NAMES_PT = {
+    'name': 'nome',
+    'description': 'descrição',
+    'start_date': 'data inicial',
+    'end_date': 'data final',
+    'is_closed': 'status',
+    'date': 'data',
+    'cost': 'custo'
+}
 class ExpenseGroupViewSet(viewsets.ModelViewSet):
     queryset = ExpenseGroup.objects.all()
     serializer_class = ExpenseGroupSerializerReader
@@ -27,6 +41,9 @@ class ExpenseGroupViewSet(viewsets.ModelViewSet):
         response = super().create(request, *args, **kwargs)
         if response.status_code == 201:
             group = ExpenseGroup.objects.filter(name=request.data['name']).last()
+            members = request.data.get("members")
+            for member in members:
+                Membership.objects.create(group=group, user_id=member)
             ActionLog.objects.create(user_id=1, expense_group_id=group.id,
                                      type=ActionLog.ActionTypes.CREATE,
                                      description=f"Criou o grupo {group.name}")
@@ -37,13 +54,10 @@ class ExpenseGroupViewSet(viewsets.ModelViewSet):
         response = super().update(request, *args, **kwargs)
         if response.status_code == 200:
             changes = {}
-            print(request.data)
             for field in request.data.keys():
                 if field in ['name', 'description']:
-                    readable_name = 'nome' if field == 'name' else 'descrição'
                     if (old := getattr(obj, field)) != (new := request.data.get(field)):
-                        print(old, new)
-                        changes[field] = f"Mudou o {readable_name} de '{old}' para '{new}'"
+                        changes[field] = f"Mudou o(a) {FIELDS_NAMES_PT[field]} de '{old}' para '{new}'"
                 elif field == 'members':
                     old_members = set(obj.members.values_list("id", flat=True))
                     new_members = set(request.data.get(field))
@@ -55,7 +69,11 @@ class ExpenseGroupViewSet(viewsets.ModelViewSet):
                         new_members = User.objects.filter(id__in=new_members)
                         removed_members_data = UserSerializer(removed_members, many=True).data
                         new_members_data = UserSerializer(new_members, many=True).data
-
+                        obj.refresh_from_db()
+                        for member in removed_members:
+                            obj.memberships.filter(user=member).delete()
+                        for member in new_members:
+                            Membership.objects.create(group=obj, user=member)
                         if removed_members:
                             changes['members'] = "Removeu o(s) membro(s) "
                             for member in removed_members_data:
@@ -66,9 +84,6 @@ class ExpenseGroupViewSet(viewsets.ModelViewSet):
                             for member in new_members_data:
                                 changes['members'] += member['full_name'] + ', '
                             changes['members'] = changes['members'][:-2] + '.'
-
-
-            print(changes)
             ActionLog.objects.create(user_id=1, expense_group_id=obj.id,
                                      type=ActionLog.ActionTypes.UPDATE,
                                      description=f"Atualizou o grupo {obj.name}",
@@ -80,6 +95,7 @@ class ExpenseGroupViewSet(viewsets.ModelViewSet):
 class RegardingViewSet(viewsets.ModelViewSet):
     queryset = Regarding.objects.all()
     serializer_class = RegardingSerializerWriter
+
 
     def get_serializer_class(self):
         method = self.request.method
@@ -97,31 +113,55 @@ class RegardingViewSet(viewsets.ModelViewSet):
         return response
 
     def update(self, request, *args, **kwargs):
+        obj = Regarding.objects.get(pk=kwargs['pk'])
         response = super().update(request, *args, **kwargs)
         if response.status_code == 200:
-            obj = Regarding.objects.get(pk=kwargs['pk'])
+            changes = {}
+            for field in request.data.keys():
+                if field in ['name', 'description']:
+                    if (old := getattr(obj, field)) != (new := request.data.get(field)):
+                        changes[field] = f"Mudou a(o) {FIELDS_NAMES_PT[field]} de '{old}' para '{new}'"
+                elif field in ['start_date', 'end_date']:
+                    if (old := str(getattr(obj, field))) != (new := request.data.get(field)):
+                        changes[field] = f"Mudou a(o) {FIELDS_NAMES_PT[field]} de '{old[8:10]}/{old[5:7]}/{old[:4]}' para '{new[8:10]}/{new[5:7]}/{new[:4]}'"
+                elif field == 'is_closed':
+                    if (old := getattr(obj, field)) != (new := request.data.get(field)):
+                        old = 'finalizada' if old else 'em andamento'
+                        new = 'finalizada' if new else 'em andamento'
+                        changes[field] = f"Mudou a(o) {FIELDS_NAMES_PT[field]} de '{old}' para '{new}'"
+
             ActionLog.objects.create(user_id=1, expense_group_id=obj.expense_group.id,
                                      type=ActionLog.ActionTypes.UPDATE,
-                                     description=f"Atualizou a referência {obj.name}")
+                                     description=f"Atualizou a referência {obj.name}",
+                                     changes_json=changes)
         return response
+
+
 class WalletViewSet(viewsets.ModelViewSet):
     queryset = Wallet.objects.all()
     serializer_class = WalletSerializer
+    permission_classes = [permissions.IsAuthenticated]
+
 
 
 class PaymentMethodViewSet(viewsets.ModelViewSet):
     queryset = PaymentMethod.objects.all()
     serializer_class = PaymentMethodSerializer
+    permission_classes = [permissions.IsAuthenticated]
+
 
 
 class PaymentViewSet(viewsets.ModelViewSet):
     queryset = Payment.objects.all()
     serializer_class = PaymentSerializerReader
+    permission_classes = [permissions.IsAuthenticated]
+
 
 
 class ExpenseViewSet(viewsets.ModelViewSet):
     queryset = Expense.objects.all().order_by("date")
     serializer_class = ExpenseSerializerReader
+
     def get_serializer_class(self):
         method = self.request.method
         if method == 'PATCH' or method == 'POST':
@@ -203,11 +243,8 @@ class ExpenseViewSet(viewsets.ModelViewSet):
         expense_data["cost"] = expense_data["cost"].replace(".", "").replace(",", ".")
         expense_serializer = self.get_serializer(expense, data=expense_data, partial=True)
         expense_serializer.is_valid(raise_exception=True)
-        expense_serializer.save()
 
-        ActionLog.objects.create(user_id=1, expense_group_id=expense.regarding.expense_group.id,
-                                 type=ActionLog.ActionTypes.UPDATE,
-                                 description=f"Atualizou a despesa {expense_data['name']}")
+
         print(expense)
         items_to_create = []
         items_to_update = []
@@ -224,16 +261,16 @@ class ExpenseViewSet(viewsets.ModelViewSet):
                 items_to_create.append(item)
         item_serializer_create = ItemSerializerWriter(data=items_to_create, many=True)
         item_serializer_create.is_valid(raise_exception=True)
-        Item.objects.filter(expense=expense.id).exclude(id__in=[payment['id'] for payment in items_to_update]).delete()
+        items_to_delete = Item.objects.filter(expense=expense.id).exclude(id__in=[item['id'] for item in items_to_update])
+        items_to_delete_names = items_to_delete.values_list("name", flat=True)
 
-        item_serializer_create.save()
 
-
+        items_serializers_to_save = []
         for item in items_to_update:
             obj = Item.objects.get(pk=item['id'])
             item_serializer_update = ItemSerializerWriter(obj, data=item, partial=True)
             item_serializer_update.is_valid(raise_exception=True)
-            item_serializer_update.save()
+            items_serializers_to_save.append(item_serializer_update)
 
 
 
@@ -241,7 +278,7 @@ class ExpenseViewSet(viewsets.ModelViewSet):
         payments_to_update = []
         for payment in request.data.get("payments"):
             payer = payment["payer"]
-            payment = {**payment, "expense": expense.id, "payer": payer['id'], "payment_method": payment["payment_method"]["id"]}
+            payment = {**payment, "expense": expense.id, "payer": payer['id'], "payment_method": payment["payment_method"]["id"], 'payer_name': payer['full_name']}
             payment["value"] = payment["value"].replace(".", "").replace(",", ".")
             if "created_at" in payment.keys():
                 payments_to_update.append(payment)
@@ -251,21 +288,94 @@ class ExpenseViewSet(viewsets.ModelViewSet):
         payment_serializer_create = PaymentSerializerWriter(data=payments_to_create, many=True)
         payment_serializer_create.is_valid(raise_exception=True)
 
+        payments_serializers_to_save = []
         for payment in payments_to_update:
             obj = Payment.objects.get(pk=payment['id'])
             payment_serializer_update = PaymentSerializerWriter(obj, data=payment, partial=True)
             payment_serializer_update.is_valid(raise_exception=True)
-            payment_serializer_update.save()
-        Payment.objects.filter(expense=expense.id).exclude(id__in=[payment['id'] for payment in payments_to_update]).delete()
+            payments_serializers_to_save.append(payment_serializer_update)
+
+        payments_to_delete = Payment.objects.filter(expense=expense.id).exclude(id__in=[payment['id'] for payment in payments_to_update])
+        payments_to_delete_data = payments_to_delete.values("payer__first_name", "value")
+
+        expense_serializer.save()
+        items_to_delete.delete()
+        item_serializer_create.save()
+        payments_to_delete.delete()
         payment_serializer_create.save()
+        for item_serializer in items_serializers_to_save:
+            item_serializer.save()
+        for payment_serializer in payments_serializers_to_save:
+            payment_serializer.save()
+
 
         print("here")
         headers = self.get_success_headers(expense_serializer.data)
+        changes = {}
+        for field in request.data.keys():
+            if field in ['name', 'description', 'cost']:
+                if (old := getattr(expense, field)) != (new := request.data.get(field)):
+                    changes[field] = f"Mudou a(o) {FIELDS_NAMES_PT[field]} de '{old}' para '{new}'"
+            elif field == 'date':
+                if (old := str(getattr(expense, field))) != (new := request.data.get(field)):
+                    changes[
+                        field] = f"Mudou a(o) {FIELDS_NAMES_PT[field]} de '{old[8:10]}/{old[5:7]}/{old[:4]}' para '{new[8:10]}/{new[5:7]}/{new[:4]}'"
+            """elif field == 'items':
+                message = 'Deletou os itens '
+                changes[field] = ''
+                if len(items_to_delete_names):
+                    changes[field] = message
+                    for item in items_to_delete_names:
+                        changes[field] += f"{item}, "
+                    changes[field] = changes[field][:-2] + '.'
+                message = 'Atualizou os itens '
+                if len(items_to_update):
+                    changes[field] += message
+                    for item in items_to_update:
+                        changes[field] += f"{item['name']}, "
+                    changes[field] = changes[field][:-2] + '.'
+                message = 'Criou os itens '
+                if len(items_to_create):
+                    changes[field] += message
+                    for item in items_to_create:
+                        changes[field] += f"{item['name']}, "
+                    changes[field] = changes[field][:-2] + '.'
+                if not changes[field]:
+                    del changes[field]
+            elif field == 'payments':
+                message = 'Deletou os pagamentos '
+                changes[field] = ''
+                if len(payments_to_delete_data):
+                    changes[field] = message
+                    for payment in payments_to_delete_data:
+                        changes[field] += f"{payment['payer__first_name']}-{payment['value']}, "
+                    changes[field] = changes[field][:-2] + '.'
+                message = 'Atualizou os pagamentos '
+                if len(payments_to_update):
+                    changes[field] += message
+                    for payment in payments_to_update:
+                        changes[field] += f"{payment['payer_name']}-{payment['value']}, "
+                    changes[field] = changes[field][:-2] + '.'
+                message = 'Criou os pagamentos '
+                if len(payments_to_create):
+                    changes[field] += message
+                    for payment in payments_to_create:
+                        changes[field] += f"{payment['payer_name']}-{payment['value']}, "
+                    changes[field] = changes[field][:-2] + '.'
+                if not changes[field]:
+                    del changes[field]"""
+        ActionLog.objects.create(user_id=1, expense_group_id=expense.regarding.expense_group.id,
+                                 type=ActionLog.ActionTypes.UPDATE,
+                                 description=f"Atualizou a despesa {expense_data['name']}", changes_json=changes)
         return Response(expense_serializer.data, status=status.HTTP_200_OK, headers=headers)
+
+
 
 class TagViewSet(viewsets.ModelViewSet):
     queryset = Tag.objects.all()
     serializer_class = TagSerializer
+    permission_classes = [permissions.IsAuthenticated]
+
 
 
 class ItemViewSet(viewsets.ModelViewSet):
@@ -273,9 +383,11 @@ class ItemViewSet(viewsets.ModelViewSet):
     serializer_class = ItemSerializerReader
 
 
+
 class UserViewSet(viewsets.ModelViewSet):
     queryset = User.objects.all()
     serializer_class = UserSerializer
+
 
 
 class JoinGroup(views.APIView):
@@ -303,9 +415,11 @@ class NotificationViewSet(viewsets.ModelViewSet):
     serializer_class = NotificationSerializer
 
 
+
 class ValidationViewSet(viewsets.ModelViewSet):
     queryset = Validation.objects.all()
     serializer_class = ValidationSerializerReader
+
 
     def get_serializer_class(self):
         method = self.request.method
@@ -319,7 +433,93 @@ class ActionsLogViewSet(viewsets.ModelViewSet):
     queryset = ActionLog.objects.all()
     serializer_class = ActionLogSerializer
 
+
     def get_queryset(self):
         #self.queryset = self.queryset.filter(user=self.request.user)
         self.queryset = self.queryset.order_by("-created_at")
         return self.queryset
+
+
+class Login(views.APIView):
+    authentication_classes = []
+    def post(self, request, format=None):
+        data = request.data
+
+        email = data.get('email', None)
+        password = data.get('password', None)
+        google_account_id = data.get('accountId', None)
+        print(data)
+        if google_account_id:
+            try:
+                user = User.objects.get(Q(google_id=google_account_id) | Q(email=email))
+                if user.email == email and user.google_id != google_account_id:
+                    return Response(
+                        data={'detail': "Conta com esse email não foi cadastrada pelo Google. Tente entrar com sua senha!"},
+                        status=status.HTTP_404_NOT_FOUND)
+            except User.DoesNotExist:
+                return Response(data={'detail': "Conta com esse email não existe. Tente registrar-se com o google "
+                                                    "antes de fazer login."},
+                                    status=status.HTTP_404_NOT_FOUND)
+            else:
+                pass
+        else:
+            user = authenticate(request, username=email, password=password)
+
+        if user is not None:
+            if user.is_active:
+                # login(request, user)
+                serializer = UserSerializer(user)
+                instance, token = AuthToken.objects.create(user)
+                instance.expiry = datetime.now() + timedelta(days=+30)
+                instance.save()
+
+                return Response(data={'user': serializer.data, 'api_token': token, 'fcm_token': user.fcm_token}, status=status.HTTP_200_OK)
+            else:
+                return Response(data={'detail': 'Usuário não confirmou ou desativou a conta.'}, status=status.HTTP_400_BAD_REQUEST)
+        elif User.objects.filter(email=email).count():
+            return Response(data={'detail': "Email e/ou senha inválidos. Tente novamente!"}, status=status.HTTP_401_UNAUTHORIZED)
+        else:
+            return Response(data={'detail': "Conta com esse email não existe"}, status=status.HTTP_404_NOT_FOUND)
+
+
+class Register(views.APIView):
+    authentication_classes = []
+    def post(self, request, format=None):
+        data = request.data
+        print(data)
+        google_account_id = data.get('accountId', None)
+
+        user_data = {
+            "first_name": data.get('firstName', None),
+            "last_name": data.get('lastName', None),
+            "email": data.get('email', None),
+            "password": data.get('email', None) if google_account_id else data.get('password', None),
+            "username": data.get('email', None)
+        }
+        print(user_data)
+        if User.objects.filter(email=user_data["email"]).count():
+            return Response(data={
+            'detail': "Já existe uma conta com esse email. Tente cadastrar outro ou faça login com o email fornecido!"},
+                            status=status.HTTP_401_UNAUTHORIZED)
+        else:
+            fcm_token = data.get('fcmToken', None)
+            try:
+                user = User.objects.create_user(**user_data)
+            except Exception as e:
+                print(e)
+            else:
+                if user is not None:
+                    if user.is_active:
+                        serializer = UserSerializer(user)
+                        instance, token = AuthToken.objects.create(user)
+                        instance.expiry = datetime.now() + timedelta(days=+30)
+                        instance.save()
+
+                        return Response(data={'user': serializer.data, 'api_token': token},
+                                            status=status.HTTP_200_OK)
+                    else:
+                        return Response(data={'detail': 'Usuário não confirmou ou desativou a conta.'},
+                                            status=status.HTTP_400_BAD_REQUEST)
+                else:
+                    return Response(data={'detail': "Erro ao criar conta. Tente novamente!"},
+                                        status=status.HTTP_404_NOT_FOUND)

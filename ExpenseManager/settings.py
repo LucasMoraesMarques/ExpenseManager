@@ -25,17 +25,15 @@ SECRET_KEY = "django-insecure-v0jm6@@@5f8b8av610l9f69go@54m#94a@)mo)myau8(1()r=6
 # SECURITY WARNING: don't run with debug turned on in production!
 DEBUG = config("DEBUG", cast=bool)
 
-ALLOWED_HOSTS = [
-    "127.0.0.1",
-    "localhost",
-    "192.168.0.107"
-]
+ALLOWED_HOSTS = ["*"]
 
 CORS_ALLOWED_ORIGINS = [
 'http://127.0.0.1:3000', #For React Project
 'http://localhost:3000',
 'http://127.0.0.1:8000',  #For Django Project
-'http://192.168.0.107:3000'
+'http://192.168.0.107:3000',
+"http://192.168.0.105:3000",
+"http://192.168.0.104:3000"
 ]
 
 
@@ -52,6 +50,7 @@ INSTALLED_APPS = [
     "rest_framework",
     "corsheaders",
     "phonenumber_field",
+    "knox"
 
 ]
 
@@ -137,6 +136,7 @@ STATIC_URL = "static/"
 
 DEFAULT_AUTO_FIELD = "django.db.models.BigAutoField"
 AUTH_USER_MODEL = 'core.User'
+AUTHENTICATION_BACKENDS = ('core.auth_backend.EmailBackend',)
 
 REST_FRAMEWORK = {
     'DEFAULT_FILTER_BACKENDS': ['core.filters.BaseFilter'],

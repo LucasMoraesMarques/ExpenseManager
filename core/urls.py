@@ -20,8 +20,8 @@ urlpatterns = router.urls
 
 urlpatterns = [
     path('', include(router.urls)),
-    #path('api-auth/', include('rest_framework.urls', namespace='rest_framework')),
-    #path('login/', views.Login.as_view()),
-    #path('register/', views.Register.as_view())
+    path('api-auth/', include('rest_framework.urls', namespace='rest_framework')),
+    path('login/', views.Login.as_view()),
+    path('register/', views.Register.as_view()),
     path('join-group/<str:hash>', views.JoinGroup.as_view())
 ]
