@@ -12,6 +12,7 @@ from django.db.models import F, Q
 from knox.models import AuthToken
 from datetime import datetime, timedelta
 from django.db import transaction
+import json
 
 FIELDS_NAMES_PT = {
     'name': 'nome',
@@ -140,6 +141,17 @@ class RegardingViewSet(viewsets.ModelViewSet):
                                      type=ActionLog.ActionTypes.UPDATE,
                                      description=f"Atualizou a referência {obj.name}",
                                      changes_json=changes)
+        if request.data.get("is_closed", False):
+            regarding_serializer = RegardingSerializerReader(obj, context={"request": request})
+            totals = regarding_serializer.data
+            print(totals)
+            obj.balance_json = json.dumps({
+                "general_total": totals.get('general_total', {}),
+                "consumer_total": totals.get('consumer_total', {}),
+                "total_by_day": totals.get('total_by_day', {}),
+                "total_member_vs_member": totals.get('total_member_vs_member', {}),
+            }, default=str)
+            obj.save(update_fields=["balance_json"])
         return response
 
 
