@@ -11,6 +11,7 @@ from django.contrib.auth import authenticate
 from django.db.models import F, Q
 from knox.models import AuthToken
 from datetime import datetime, timedelta
+from django.db import transaction
 
 FIELDS_NAMES_PT = {
     'name': 'nome',
@@ -19,7 +20,8 @@ FIELDS_NAMES_PT = {
     'end_date': 'data final',
     'is_closed': 'status',
     'date': 'data',
-    'cost': 'custo'
+    'cost': 'custo',
+    'payments': 'pagamentos'
 }
 class ExpenseGroupViewSet(viewsets.ModelViewSet):
     queryset = ExpenseGroup.objects.all()
@@ -37,6 +39,7 @@ class ExpenseGroupViewSet(viewsets.ModelViewSet):
         else:
             return ExpenseGroupSerializerReader
 
+    @transaction.atomic
     def create(self, request, *args, **kwargs):
         response = super().create(request, *args, **kwargs)
         if response.status_code == 201:
@@ -49,6 +52,7 @@ class ExpenseGroupViewSet(viewsets.ModelViewSet):
                                      description=f"Criou o grupo {group.name}")
         return response
 
+    @transaction.atomic
     def update(self, request, *args, **kwargs):
         obj = ExpenseGroup.objects.get(pk=kwargs['pk'])
         response = super().update(request, *args, **kwargs)
@@ -112,23 +116,25 @@ class RegardingViewSet(viewsets.ModelViewSet):
                                      description=f"Criou a referência {request.data['name']}")
         return response
 
+    @transaction.atomic
     def update(self, request, *args, **kwargs):
         obj = Regarding.objects.get(pk=kwargs['pk'])
         response = super().update(request, *args, **kwargs)
         if response.status_code == 200:
             changes = {}
             for field in request.data.keys():
+                field_name_pt = FIELDS_NAMES_PT.get(field, field)
                 if field in ['name', 'description']:
                     if (old := getattr(obj, field)) != (new := request.data.get(field)):
-                        changes[field] = f"Mudou a(o) {FIELDS_NAMES_PT[field]} de '{old}' para '{new}'"
+                        changes[field_name_pt] = f"Mudou a(o) {FIELDS_NAMES_PT[field]} de '{old}' para '{new}'"
                 elif field in ['start_date', 'end_date']:
                     if (old := str(getattr(obj, field))) != (new := request.data.get(field)):
-                        changes[field] = f"Mudou a(o) {FIELDS_NAMES_PT[field]} de '{old[8:10]}/{old[5:7]}/{old[:4]}' para '{new[8:10]}/{new[5:7]}/{new[:4]}'"
+                        changes[field_name_pt] = f"Mudou a(o) {FIELDS_NAMES_PT[field]} de '{old[8:10]}/{old[5:7]}/{old[:4]}' para '{new[8:10]}/{new[5:7]}/{new[:4]}'"
                 elif field == 'is_closed':
                     if (old := getattr(obj, field)) != (new := request.data.get(field)):
                         old = 'finalizada' if old else 'em andamento'
                         new = 'finalizada' if new else 'em andamento'
-                        changes[field] = f"Mudou a(o) {FIELDS_NAMES_PT[field]} de '{old}' para '{new}'"
+                        changes[field_name_pt] = f"Mudou a(o) {FIELDS_NAMES_PT[field]} de '{old}' para '{new}'"
 
             ActionLog.objects.create(user_id=1, expense_group_id=obj.expense_group.id,
                                      type=ActionLog.ActionTypes.UPDATE,
@@ -168,6 +174,8 @@ class ExpenseViewSet(viewsets.ModelViewSet):
             return ExpenseSerializerWriter
         else:
             return ExpenseSerializerReader
+
+    @transaction.atomic
     def destroy(self, request, *args, **kwargs):
         if "ids" in request.query_params:
             ids = request.query_params.get('ids').split(',')
@@ -196,6 +204,7 @@ class ExpenseViewSet(viewsets.ModelViewSet):
                                      description=f"Deletou a despesa {expense.name}")
         return response
 
+    @transaction.atomic
     def create(self, request, *args, **kwargs):
         print(request.data)
         expense_data = {**request.data, "created_by_id": 1}
@@ -236,6 +245,7 @@ class ExpenseViewSet(viewsets.ModelViewSet):
         headers = self.get_success_headers(expense_serializer.data)
         return Response(expense_serializer.data, status=status.HTTP_201_CREATED, headers=headers)
 
+    @transaction.atomic
     def partial_update(self, request, pk=None, *args, **kwargs):
         print(request.data)
         expense = Expense.objects.get(id=pk)
@@ -262,11 +272,12 @@ class ExpenseViewSet(viewsets.ModelViewSet):
         item_serializer_create = ItemSerializerWriter(data=items_to_create, many=True)
         item_serializer_create.is_valid(raise_exception=True)
         items_to_delete = Item.objects.filter(expense=expense.id).exclude(id__in=[item['id'] for item in items_to_update])
-        items_to_delete_names = items_to_delete.values_list("name", flat=True)
+        items_to_delete_names = list(items_to_delete.values_list("name", flat=True))
 
 
         items_serializers_to_save = []
         for item in items_to_update:
+            print(item)
             obj = Item.objects.get(pk=item['id'])
             item_serializer_update = ItemSerializerWriter(obj, data=item, partial=True)
             item_serializer_update.is_valid(raise_exception=True)
@@ -278,7 +289,7 @@ class ExpenseViewSet(viewsets.ModelViewSet):
         payments_to_update = []
         for payment in request.data.get("payments"):
             payer = payment["payer"]
-            payment = {**payment, "expense": expense.id, "payer": payer['id'], "payment_method": payment["payment_method"]["id"], 'payer_name': payer['full_name']}
+            payment = {**payment, "expense": expense.id, "payer": payer['id'], "payment_method": payment["payment_method"]["id"], 'payer_name': payer.get('name', None) or payer.get('full_name', None)}
             payment["value"] = payment["value"].replace(".", "").replace(",", ".")
             if "created_at" in payment.keys():
                 payments_to_update.append(payment)
@@ -308,62 +319,70 @@ class ExpenseViewSet(viewsets.ModelViewSet):
         for payment_serializer in payments_serializers_to_save:
             payment_serializer.save()
 
+        if request.data.get("revalidate", False):
+            expense.validations.update(is_active=True, validated_at=None, note="")
 
         print("here")
         headers = self.get_success_headers(expense_serializer.data)
         changes = {}
         for field in request.data.keys():
-            if field in ['name', 'description', 'cost']:
+            field_name_pt = FIELDS_NAMES_PT.get(field, field)
+            if field in ['name', 'description']:
                 if (old := getattr(expense, field)) != (new := request.data.get(field)):
-                    changes[field] = f"Mudou a(o) {FIELDS_NAMES_PT[field]} de '{old}' para '{new}'"
+                    changes[field_name_pt] = f"Mudou a(o) {FIELDS_NAMES_PT[field]} de '{old}' para '{new}'"
+            elif field == "cost":
+                old = getattr(expense, field)
+                new = float(request.data.get(field).replace('.', "").replace(",", "."))
+                if old != new:
+                    changes[field_name_pt] = f"Mudou a(o) {FIELDS_NAMES_PT[field]} de R${old} para R${new}"
             elif field == 'date':
                 if (old := str(getattr(expense, field))) != (new := request.data.get(field)):
                     changes[
-                        field] = f"Mudou a(o) {FIELDS_NAMES_PT[field]} de '{old[8:10]}/{old[5:7]}/{old[:4]}' para '{new[8:10]}/{new[5:7]}/{new[:4]}'"
-            """elif field == 'items':
-                message = 'Deletou os itens '
-                changes[field] = ''
+                        field_name_pt] = f"Mudou a(o) {FIELDS_NAMES_PT[field]} de '{old[8:10]}/{old[5:7]}/{old[:4]}' para '{new[8:10]}/{new[5:7]}/{new[:4]}'"
+            elif field == 'items':
+                message = '\nDeletou os itens '
+                changes[field_name_pt] = ''
                 if len(items_to_delete_names):
-                    changes[field] = message
+                    changes[field_name_pt] = message
                     for item in items_to_delete_names:
-                        changes[field] += f"{item}, "
-                    changes[field] = changes[field][:-2] + '.'
-                message = 'Atualizou os itens '
+                        changes[field_name_pt] += f"{item}, "
+                    changes[field_name_pt] = changes[field_name_pt][:-2] + '.'
+                """message = '\nAtualizou os itens '
                 if len(items_to_update):
                     changes[field] += message
                     for item in items_to_update:
                         changes[field] += f"{item['name']}, "
-                    changes[field] = changes[field][:-2] + '.'
-                message = 'Criou os itens '
+                    changes[field] = changes[field][:-2] + '.'"""
+                message = '\nCriou os itens '
                 if len(items_to_create):
-                    changes[field] += message
+                    changes[field_name_pt] += message
                     for item in items_to_create:
-                        changes[field] += f"{item['name']}, "
-                    changes[field] = changes[field][:-2] + '.'
-                if not changes[field]:
-                    del changes[field]
+                        changes[field_name_pt] += f"{item['name']}, "
+                    changes[field_name_pt] = changes[field_name_pt][:-2] + '.'
+                if not changes[field_name_pt]:
+                    del changes[field_name_pt]
             elif field == 'payments':
-                message = 'Deletou os pagamentos '
-                changes[field] = ''
+                message = '\nDeletou os pagamentos '
+                changes[field_name_pt] = ''
                 if len(payments_to_delete_data):
-                    changes[field] = message
+                    changes[field_name_pt] = message
                     for payment in payments_to_delete_data:
-                        changes[field] += f"{payment['payer__first_name']}-{payment['value']}, "
-                    changes[field] = changes[field][:-2] + '.'
-                message = 'Atualizou os pagamentos '
+                        changes[field_name_pt] += f"{payment['payer__first_name']} R${payment['value']}, "
+                    changes[field_name_pt] = changes[field_name_pt][:-2] + '.'
+                """message = '\nAtualizou os pagamentos '
                 if len(payments_to_update):
                     changes[field] += message
                     for payment in payments_to_update:
-                        changes[field] += f"{payment['payer_name']}-{payment['value']}, "
-                    changes[field] = changes[field][:-2] + '.'
-                message = 'Criou os pagamentos '
+                        changes[field] += f"{payment['payer_name']} - R${payment['value']}, "
+                    changes[field] = changes[field][:-2] + '.'"""
+                message = '\nCriou os pagamentos '
                 if len(payments_to_create):
-                    changes[field] += message
+                    changes[field_name_pt] += message
                     for payment in payments_to_create:
-                        changes[field] += f"{payment['payer_name']}-{payment['value']}, "
-                    changes[field] = changes[field][:-2] + '.'
-                if not changes[field]:
-                    del changes[field]"""
+                        changes[field_name_pt] += f"{payment['payer_name']} R${payment['value']}, "
+                    changes[field_name_pt] = changes[field_name_pt][:-2] + '.'
+                if not changes[field_name_pt]:
+                    del changes[field_name_pt]
         ActionLog.objects.create(user_id=1, expense_group_id=expense.regarding.expense_group.id,
                                  type=ActionLog.ActionTypes.UPDATE,
                                  description=f"Atualizou a despesa {expense_data['name']}", changes_json=changes)
