@@ -11,7 +11,7 @@ class ExpenseGroupAdmin(admin.ModelAdmin):
 
 @admin.register(Membership)
 class MembershipAdmin(admin.ModelAdmin):
-    pass
+    list_display = ("group", "user", "joined_at", "average_weight")
 
 
 @admin.register(Regarding)
@@ -69,4 +69,4 @@ class ValidationAdmin(admin.ModelAdmin):
 
 @admin.register(ActionLog)
 class ActionLogAdmin(admin.ModelAdmin):
-    pass
+    list_display = ['__str__', 'type', "expense_group"]

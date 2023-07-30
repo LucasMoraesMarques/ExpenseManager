@@ -27,9 +27,10 @@ FIELDS_NAMES_PT = {
 class ExpenseGroupViewSet(viewsets.ModelViewSet):
     queryset = ExpenseGroup.objects.all()
     serializer_class = ExpenseGroupSerializerReader
+    permission_classes = [permissions.IsAuthenticated]
 
     def get_queryset(self):
-        #self.queryset = self.queryset.filter(user=self.request.user)
+        self.queryset = self.request.user.expenses_groups.all()
         self.queryset = self.queryset.prefetch_related("regardings", "regardings__expenses")
         return self.queryset
 
@@ -100,6 +101,11 @@ class ExpenseGroupViewSet(viewsets.ModelViewSet):
 class RegardingViewSet(viewsets.ModelViewSet):
     queryset = Regarding.objects.all()
     serializer_class = RegardingSerializerWriter
+    permission_classes = [permissions.IsAuthenticated]
+
+    def get_queryset(self):
+        self.queryset = self.queryset.filter(expense_group__in=self.request.user.expenses_groups.all())
+        return self.queryset
 
 
     def get_serializer_class(self):
@@ -147,7 +153,7 @@ class RegardingViewSet(viewsets.ModelViewSet):
             print(totals)
             obj.balance_json = json.dumps({
                 "general_total": totals.get('general_total', {}),
-                "consumer_total": totals.get('consumer_total', {}),
+                "consumer_total": totals.get('consumer_total', []),
                 "total_by_day": totals.get('total_by_day', {}),
                 "total_member_vs_member": totals.get('total_member_vs_member', {}),
             }, default=str)
@@ -160,12 +166,20 @@ class WalletViewSet(viewsets.ModelViewSet):
     serializer_class = WalletSerializer
     permission_classes = [permissions.IsAuthenticated]
 
+    def get_queryset(self):
+        self.queryset = self.queryset.filter(owner=self.request.user)
+        return self.queryset
+
 
 
 class PaymentMethodViewSet(viewsets.ModelViewSet):
     queryset = PaymentMethod.objects.all()
     serializer_class = PaymentMethodSerializer
     permission_classes = [permissions.IsAuthenticated]
+
+    def get_queryset(self):
+        self.queryset = self.queryset.filter(wallet=self.request.user.wallet)
+        return self.queryset
 
 
 
@@ -174,11 +188,22 @@ class PaymentViewSet(viewsets.ModelViewSet):
     serializer_class = PaymentSerializerReader
     permission_classes = [permissions.IsAuthenticated]
 
+    def get_queryset(self):
+        self.queryset = self.queryset.filter(expense__regarding__expense_group__in=self.request.user.expenses_groups.all())
+        return self.queryset
+
 
 
 class ExpenseViewSet(viewsets.ModelViewSet):
     queryset = Expense.objects.all().order_by("date")
     serializer_class = ExpenseSerializerReader
+    permission_classes = [permissions.IsAuthenticated]
+
+    def get_queryset(self):
+        self.queryset = self.queryset.filter(regarding__expense_group__in=self.request.user.expenses_groups.all())
+        return self.queryset
+
+
 
     def get_serializer_class(self):
         method = self.request.method
@@ -407,26 +432,36 @@ class TagViewSet(viewsets.ModelViewSet):
     serializer_class = TagSerializer
     permission_classes = [permissions.IsAuthenticated]
 
+    def get_queryset(self):
+        self.queryset = self.request.user.created_tags.all()
+        return self.queryset
+
 
 
 class ItemViewSet(viewsets.ModelViewSet):
     queryset = Item.objects.all()
     serializer_class = ItemSerializerReader
+    permission_classes = [permissions.IsAuthenticated]
+
+    def get_queryset(self):
+        self.queryset = self.queryset.filter(expense__regarding__expense_group__in=self.request.user.expenses_groups.all())
+        return self.queryset
 
 
 
 class UserViewSet(viewsets.ModelViewSet):
     queryset = User.objects.all()
     serializer_class = UserSerializer
+    permission_classes = [permissions.IsAuthenticated]
 
 
 
 class JoinGroup(views.APIView):
-    authentication_classes = []
+    permission_classes = [permissions.IsAuthenticated]
     def get(self, request, hash, format=None):
         try:
             group = ExpenseGroup.objects.get(hash_id=hash)
-            user = User.objects.get(id=1)
+            user = request.user
             if group not in user.expenses_groups.all():
                 membership = Membership.objects.create(group=group, user=user)
             else:
@@ -444,12 +479,22 @@ class JoinGroup(views.APIView):
 class NotificationViewSet(viewsets.ModelViewSet):
     queryset = Notification.objects.all()
     serializer_class = NotificationSerializer
+    permission_classes = [permissions.IsAuthenticated]
+
+    def get_queryset(self):
+        self.queryset = self.request.user.notifications.all()
+        return self.queryset
 
 
 
 class ValidationViewSet(viewsets.ModelViewSet):
     queryset = Validation.objects.all()
     serializer_class = ValidationSerializerReader
+    permission_classes = [permissions.IsAuthenticated]
+
+    def get_queryset(self):
+        self.queryset = self.queryset.filter(expense__regarding__expense_group__in=self.request.user.expenses_groups.all())
+        return self.queryset
 
 
     def get_serializer_class(self):
@@ -463,12 +508,11 @@ class ValidationViewSet(viewsets.ModelViewSet):
 class ActionsLogViewSet(viewsets.ModelViewSet):
     queryset = ActionLog.objects.all()
     serializer_class = ActionLogSerializer
-
+    permission_classes = [permissions.IsAuthenticated]
 
     def get_queryset(self):
-        #self.queryset = self.queryset.filter(user=self.request.user)
-        self.queryset = self.queryset.order_by("-created_at")
-        return self.queryset
+        self.queryset = self.queryset.filter(expense_group__in=self.request.user.expenses_groups.all())
+        return self.queryset.order_by("-created_at")
 
 
 class Login(views.APIView):
@@ -507,8 +551,11 @@ class Login(views.APIView):
                 return Response(data={'user': serializer.data, 'api_token': token, 'fcm_token': user.fcm_token}, status=status.HTTP_200_OK)
             else:
                 return Response(data={'detail': 'Usuário não confirmou ou desativou a conta.'}, status=status.HTTP_400_BAD_REQUEST)
-        elif User.objects.filter(email=email).count():
-            return Response(data={'detail': "Email e/ou senha inválidos. Tente novamente!"}, status=status.HTTP_401_UNAUTHORIZED)
+        elif user:=User.objects.filter(email=email).first():
+            if user.google_id:
+                return Response(data={'detail': "Email cadastrado pelo google. Tente entrar com o google!"}, status=status.HTTP_401_UNAUTHORIZED)
+            else:
+                return Response(data={'detail': "Email e/ou senha inválidos. Tente novamente!"}, status=status.HTTP_401_UNAUTHORIZED)
         else:
             return Response(data={'detail': "Conta com esse email não existe"}, status=status.HTTP_404_NOT_FOUND)
 
@@ -517,40 +564,37 @@ class Register(views.APIView):
     authentication_classes = []
     def post(self, request, format=None):
         data = request.data
-        print(data)
-        google_account_id = data.get('accountId', None)
-
         user_data = {
             "first_name": data.get('firstName', None),
             "last_name": data.get('lastName', None),
             "email": data.get('email', None),
-            "password": data.get('email', None) if google_account_id else data.get('password', None),
-            "username": data.get('email', None)
+            "password": data.get('password', None),
+            "username": data.get('email', None),
+            "google_id": data.get('googleId', None)
         }
         print(user_data)
-        if User.objects.filter(email=user_data["email"]).count():
+        if user:=User.objects.filter(email=user_data['email']).first():
+            if user.google_id:
+                return Response(data={
+                    'detail': "Já existe uma conta com esse email cadastrada pelo google. Tente cadastrar outro ou faça login com o google."},
+                    status=status.HTTP_401_UNAUTHORIZED)
             return Response(data={
-            'detail': "Já existe uma conta com esse email. Tente cadastrar outro ou faça login com o email fornecido!"},
-                            status=status.HTTP_401_UNAUTHORIZED)
+                'detail': "Já existe uma conta com esse email. Tente cadastrar outro ou faça login com o email fornecido!"},
+                status=status.HTTP_401_UNAUTHORIZED)
         else:
-            fcm_token = data.get('fcmToken', None)
             try:
                 user = User.objects.create_user(**user_data)
             except Exception as e:
                 print(e)
+                return Response(data={
+                    'detail': "Erro inesperado ao salvar o cadastro. Tente novamente!"},
+                    status=status.HTTP_500_INTERNAL_SERVER_ERROR)
             else:
-                if user is not None:
-                    if user.is_active:
-                        serializer = UserSerializer(user)
-                        instance, token = AuthToken.objects.create(user)
-                        instance.expiry = datetime.now() + timedelta(days=+30)
-                        instance.save()
+                serializer = UserSerializer(user)
+                instance, token = AuthToken.objects.create(user)
+                instance.expiry = datetime.now() + timedelta(days=+30)
+                instance.save()
 
-                        return Response(data={'user': serializer.data, 'api_token': token},
-                                            status=status.HTTP_200_OK)
-                    else:
-                        return Response(data={'detail': 'Usuário não confirmou ou desativou a conta.'},
-                                            status=status.HTTP_400_BAD_REQUEST)
-                else:
-                    return Response(data={'detail': "Erro ao criar conta. Tente novamente!"},
-                                        status=status.HTTP_404_NOT_FOUND)
+                return Response(data={'user': serializer.data, 'api_token': token, 'fcm_token': user.fcm_token},
+                                status=status.HTTP_200_OK)
+

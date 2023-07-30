@@ -8,7 +8,23 @@ from babel.numbers import format_decimal
 from decimal import Decimal
 import json
 
+
+class PaymentMethodSerializer(serializers.ModelSerializer):
+    has_payments = serializers.SerializerMethodField()
+    number_of_payments = serializers.SerializerMethodField()
+    class Meta:
+        model = PaymentMethod
+        fields = "__all__"
+
+    def get_has_payments(self, obj):
+        return obj.payments.count() > 0
+
+    def get_number_of_payments(self, obj):
+        return obj.payments.count()
+
+
 class WalletSerializer(serializers.ModelSerializer):
+    payment_methods = PaymentMethodSerializer(read_only=True, many=True)
     class Meta:
         model = Wallet
         fields = ("payment_methods",)
@@ -64,8 +80,10 @@ class RegardingSerializerWriter(serializers.ModelSerializer):
 
 class RegardingSerializerReader(serializers.ModelSerializer):
     group_name = serializers.SerializerMethodField()
+    has_expenses = serializers.SerializerMethodField()
     general_total = serializers.SerializerMethodField()
     consumer_total = serializers.SerializerMethodField()
+    personal_total = serializers.SerializerMethodField()
     total_by_day = serializers.SerializerMethodField()
     total_member_vs_member = serializers.SerializerMethodField()
 
@@ -77,7 +95,7 @@ class RegardingSerializerReader(serializers.ModelSerializer):
         return obj.expense_group.name
 
     def get_general_total(self, obj):
-        self.user = User.objects.first() #self.context["request"].user
+        self.user = self.context["request"].user
         if obj.is_closed:
             totals = json.loads(obj.balance_json)
             self.general_total = totals.get('general_total', {})
@@ -94,8 +112,26 @@ class RegardingSerializerReader(serializers.ModelSerializer):
                 "total_paid": 0,
                 "total_overdue": 0.0
             }
-            self.personal_data = {
-                "payments__payer": 1,
+            self.personal_total = {}
+            self.consumer_total = {}
+            self.total_by_day = {}
+            self.total_member_vs_member = {}
+            if obj.expenses.count():
+                items = ItemSerializerReader(Item.objects.filter(expense__regarding__id=obj.id), many=True).data
+                self.general_total, self.consumer_total, self.total_by_day, self.total_member_vs_member = stats.calc_totals_by_regarding(obj.id, items)
+        print("dsfds", self.consumer_total)
+        user_data = list(filter(lambda x: x["payments__payer"] == self.user.id, self.consumer_total))
+        if user_data:
+            self.personal_total = user_data[0]
+        return self.general_total
+
+    def get_consumer_total(self, obj):
+        return list(self.consumer_total)
+
+    def get_personal_total(self, obj):
+        if not self.has_expenses:
+            return {
+                "payments__payer": self.user.id,
                 "total_expenses": 0,
                 "total_payments": 0,
                 "total_validation": 0,
@@ -108,18 +144,7 @@ class RegardingSerializerReader(serializers.ModelSerializer):
                 "total_paid_shared": 0,
                 "balance": 0
             }
-            self.consumer_total = {}
-            self.total_by_day = {}
-            if obj.expenses.count():
-                items = ItemSerializerReader(Item.objects.filter(expense__regarding__id=obj.id), many=True).data
-                self.general_total, self.consumer_total, self.total_by_day, self.total_member_vs_member = stats.calc_totals_by_regarding(obj.id, items)
-                user_data = list(filter(lambda x: x["payments__payer"] == self.user.id, self.consumer_total))
-                if user_data:
-                    self.consumer_total = user_data[0]
-        return self.general_total
-
-    def get_consumer_total(self, obj):
-        return self.consumer_total
+        return self.personal_total
 
     def get_total_by_day(self, obj):
         return self.total_by_day
@@ -127,19 +152,16 @@ class RegardingSerializerReader(serializers.ModelSerializer):
     def get_total_member_vs_member(self, obj):
         return self.total_member_vs_member
 
+    def get_has_expenses(self, obj):
+        self.has_expenses = obj.expenses.count() > 0
+        return self.has_expenses
+
     def to_representation(self, instance):
         ret = super().to_representation(instance)
         ret['start_date'] = instance.start_date.strftime("%d/%m/%Y")
         ret['end_date'] = instance.end_date.strftime("%d/%m/%Y")
 
         return ret
-
-
-
-class PaymentMethodSerializer(serializers.ModelSerializer):
-    class Meta:
-        model = PaymentMethod
-        fields = "__all__"
 
 
 class PaymentSerializerWriter(serializers.ModelSerializer):
@@ -247,6 +269,7 @@ class ExpenseSerializerReader(serializers.ModelSerializer):
     individual_total = serializers.SerializerMethodField()
     validations = ValidationSerializerReader(many=True)
     validation_status = serializers.SerializerMethodField()
+    regarding_is_closed = serializers.SerializerMethodField()
     class Meta:
         model = Expense
         fields = "__all__"
@@ -296,6 +319,9 @@ class ExpenseSerializerReader(serializers.ModelSerializer):
 
     def get_individual_total(self, obj):
         return self.individual
+
+    def get_regarding_is_closed(self, obj):
+        return obj.regarding.is_closed
 
 
 class ExpenseSerializerForItem(serializers.ModelSerializer):
