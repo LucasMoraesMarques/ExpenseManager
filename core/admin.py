@@ -1,7 +1,7 @@
 from django.contrib import admin
 from django.contrib.auth.admin import UserAdmin
 from .models import User, ExpenseGroup, Regarding, Wallet, PaymentMethod, Payment, Expense, Tag, Item, Validation, \
-    Notification, Membership, ActionLog
+    Notification, Membership, ActionLog, GroupInvitation
 
 
 
@@ -11,7 +11,7 @@ class ExpenseGroupAdmin(admin.ModelAdmin):
 
 @admin.register(Membership)
 class MembershipAdmin(admin.ModelAdmin):
-    list_display = ("group", "user", "joined_at", "average_weight")
+    list_display = ("group", "user", "joined_at", "average_weight", "level")
 
 
 @admin.register(Regarding)
@@ -40,7 +40,11 @@ class ExpenseAdmin(admin.ModelAdmin):
 
 
     def payer(self, obj):
-        return obj.payments.first().payer.username
+        payers = []
+        if obj.payments.count() > 0:
+            for payment in obj.payments.all():
+                payers.append(payment.payer.username)
+        return ", ".join(payers)
 
 
 @admin.register(Item)
@@ -70,3 +74,8 @@ class ValidationAdmin(admin.ModelAdmin):
 @admin.register(ActionLog)
 class ActionLogAdmin(admin.ModelAdmin):
     list_display = ['__str__', 'type', "expense_group"]
+
+
+@admin.register(GroupInvitation)
+class InvitationAdmin(admin.ModelAdmin):
+    list_display = ['__str__', "expense_group", 'sent_by', "invited", "status"]

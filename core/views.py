@@ -3,10 +3,10 @@ import datetime
 from rest_framework import viewsets, status, views, permissions
 from rest_framework.response import Response
 from core.models import ExpenseGroup, Regarding, Wallet, PaymentMethod, Payment, Expense, Tag, Item, User, Notification, \
-    Validation, Membership, ActionLog
+    Validation, Membership, ActionLog, GroupInvitation
 from core.serializers import ExpenseSerializerReader, ExpenseSerializerWriter, RegardingSerializerWriter, RegardingSerializerReader, WalletSerializer, PaymentMethodSerializer, \
     PaymentSerializerWriter, PaymentSerializerReader, ExpenseGroupSerializerWriter, ExpenseGroupSerializerReader, TagSerializer, ItemSerializerReader, ItemSerializerWriter, UserSerializer, \
-    NotificationSerializer, ValidationSerializerWriter, ValidationSerializerReader, ActionLogSerializer
+    NotificationSerializer, ValidationSerializerWriter, ValidationSerializerReader, ActionLogSerializer, GroupInvitationSerializer
 from django.contrib.auth import authenticate
 from django.db.models import F, Q
 from knox.models import AuthToken
@@ -22,7 +22,9 @@ FIELDS_NAMES_PT = {
     'is_closed': 'status',
     'date': 'data',
     'cost': 'custo',
-    'payments': 'pagamentos'
+    'payments': 'pagamentos',
+    'members': 'membros',
+    'invitations': 'convites'
 }
 class ExpenseGroupViewSet(viewsets.ModelViewSet):
     queryset = ExpenseGroup.objects.all()
@@ -46,29 +48,34 @@ class ExpenseGroupViewSet(viewsets.ModelViewSet):
         response = super().create(request, *args, **kwargs)
         if response.status_code == 201:
             group = ExpenseGroup.objects.filter(name=request.data['name']).last()
-            members = request.data.get("members")
-            for member in members:
-                Membership.objects.create(group=group, user_id=member)
-            ActionLog.objects.create(user_id=1, expense_group_id=group.id,
+            Membership.objects.create(group=group, user=request.user)
+            ActionLog.objects.create(user=request.user, expense_group_id=group.id,
                                      type=ActionLog.ActionTypes.CREATE,
                                      description=f"Criou o grupo {group.name}")
+            Notification.objects.create(
+                title=f"Novo grupo criado",
+                body=f"O grupo {group.name} foi criado com sucesso!",
+                user=request.user,
+            )
         return response
 
     @transaction.atomic
     def update(self, request, *args, **kwargs):
         obj = ExpenseGroup.objects.get(pk=kwargs['pk'])
         response = super().update(request, *args, **kwargs)
+        print(request.data)
         if response.status_code == 200:
             changes = {}
             for field in request.data.keys():
+                field_name_pt = FIELDS_NAMES_PT.get(field, field)
                 if field in ['name', 'description']:
                     if (old := getattr(obj, field)) != (new := request.data.get(field)):
-                        changes[field] = f"Mudou o(a) {FIELDS_NAMES_PT[field]} de '{old}' para '{new}'"
+                        changes[field_name_pt] = f"Mudou o(a) {FIELDS_NAMES_PT[field]} de '{old}' para '{new}'"
                 elif field == 'members':
                     old_members = set(obj.members.values_list("id", flat=True))
                     new_members = set(request.data.get(field))
                     if old_members != new_members:
-                        changes["members"] = ''
+                        changes[field_name_pt] = ''
                         removed_members = old_members.difference(new_members)
                         new_members = new_members.difference(old_members)
                         removed_members = User.objects.filter(id__in=removed_members)
@@ -76,21 +83,56 @@ class ExpenseGroupViewSet(viewsets.ModelViewSet):
                         removed_members_data = UserSerializer(removed_members, many=True).data
                         new_members_data = UserSerializer(new_members, many=True).data
                         obj.refresh_from_db()
+                        user_editor_full_name = f"{request.user.first_name + ' ' + request.user.last_name}".strip()
                         for member in removed_members:
+                            Notification.objects.create(
+                                title=f"Você foi removido(a) do grupo {obj.name}",
+                                body=f"O membro {user_editor_full_name} removeu você do grupo. Se acha que isso foi um engano, contate-o.",
+                                user=member,
+                            )
                             obj.memberships.filter(user=member).delete()
                         for member in new_members:
                             Membership.objects.create(group=obj, user=member)
                         if removed_members:
-                            changes['members'] = "Removeu o(s) membro(s) "
+                            changes[field_name_pt] = "\nRemoveu o(s) membro(s) "
                             for member in removed_members_data:
-                                changes['members'] += member['full_name'] + ', '
-                            changes['members'] = changes['members'][:-2] + '.'
+                                changes[field_name_pt] += member['full_name'] + ', '
+                            changes[field_name_pt] = changes[field_name_pt][:-2] + '.'
                         if new_members:
-                            changes['members'] = "Adicionou o(s) membro(s) "
+                            changes[field_name_pt] = "\nAdicionou o(s) membro(s) "
                             for member in new_members_data:
-                                changes['members'] += member['full_name'] + ', '
-                            changes['members'] = changes['members'][:-2] + '.'
-            ActionLog.objects.create(user_id=1, expense_group_id=obj.id,
+                                changes[field_name_pt] += member['full_name'] + ', '
+                            changes[field_name_pt] = changes[field_name_pt][:-2] + '.'
+                elif field == "memberships":
+                    memberships = request.data.get("memberships", [])
+                    changes["membros"] = ''
+                    for membership_data in memberships:
+                        if membership_data.get('updated', False):
+                            membership = obj.memberships.get(id=membership_data.get('id'))
+                            user_full_name = f"{membership.user.first_name} {membership.user.last_name}".strip()
+                            new_level_index = Membership.Levels.labels.index(membership_data['level'].upper())
+                            old_level_index = Membership.Levels.values.index(membership.level)
+                            new_level = Membership.Levels.values[new_level_index]
+                            old_level = Membership.Levels.labels[old_level_index]
+                            changes["membros"] += f"\nMudou o membro {user_full_name} de {old_level} para {membership_data['level'].upper()}"
+                            membership.level = new_level
+                            membership.save(update_fields=['level'])
+                elif field == "invitations":
+                    invitations = request.data.get("invitations", [])
+                    changes[field_name_pt] = ''
+                    for invitation in invitations:
+                        if invitation.get('create', False):
+                            group_invitation = GroupInvitation.objects.create(sent_by_id=invitation['sent_by']['id'],
+                                                           invited_id=invitation['invited']['id'],
+                                                           expense_group_id=invitation['expense_group'])
+                            group_invitation.save()
+                            changes[field_name_pt] += f"\nConvidou o usuário {invitation['invited']['full_name']}"
+                            Notification.objects.create(
+                                title=f"Convite para o grupo {invitation['group_name']}",
+                                body=f"{invitation['sent_by']['full_name']} te convidou para entrar no grupo {invitation['group_name']}",
+                                user_id=invitation['invited']['id'],
+                            )
+            ActionLog.objects.create(user=request.user, expense_group_id=obj.id,
                                      type=ActionLog.ActionTypes.UPDATE,
                                      description=f"Atualizou o grupo {obj.name}",
                                      changes_json=changes)
@@ -118,7 +160,7 @@ class RegardingViewSet(viewsets.ModelViewSet):
     def create(self, request, *args, **kwargs):
         response = super().create(request, *args, **kwargs)
         if response.status_code == 201:
-            ActionLog.objects.create(user_id=1, expense_group_id=request.data['expense_group'],
+            ActionLog.objects.create(user=request.user, expense_group_id=request.data['expense_group'],
                                      type=ActionLog.ActionTypes.CREATE,
                                      description=f"Criou a referência {request.data['name']}")
         return response
@@ -143,7 +185,7 @@ class RegardingViewSet(viewsets.ModelViewSet):
                         new = 'finalizada' if new else 'em andamento'
                         changes[field_name_pt] = f"Mudou a(o) {FIELDS_NAMES_PT[field]} de '{old}' para '{new}'"
 
-            ActionLog.objects.create(user_id=1, expense_group_id=obj.expense_group.id,
+            ActionLog.objects.create(user=request.user, expense_group_id=obj.expense_group.id,
                                      type=ActionLog.ActionTypes.UPDATE,
                                      description=f"Atualizou a referência {obj.name}",
                                      changes_json=changes)
@@ -178,6 +220,7 @@ class PaymentMethodViewSet(viewsets.ModelViewSet):
     permission_classes = [permissions.IsAuthenticated]
 
     def get_queryset(self):
+        print(self.request.user, self.request.user.wallet)
         self.queryset = self.queryset.filter(wallet=self.request.user.wallet)
         return self.queryset
 
@@ -229,14 +272,14 @@ class ExpenseViewSet(viewsets.ModelViewSet):
                 log_description = 'Deletou em massas as depesas '
                 for expense_name in deleted_expenses:
                     log_description += expense_name + ', '
-                ActionLog.objects.create(user_id=1, expense_group_id=group.id, type=ActionLog.ActionTypes.DELETE, description=log_description)
+                ActionLog.objects.create(user=request.user, expense_group_id=group.id, type=ActionLog.ActionTypes.DELETE, description=log_description)
             instances.delete()
             print(request.query_params.get('ids'))
             return Response(status=status.HTTP_204_NO_CONTENT)
         expense = Expense.objects.get(pk=kwargs['pk'])
         response = super().destroy(request, *args, **kwargs)
         if response.status_code == 204:
-            ActionLog.objects.create(user_id=1, expense_group_id=expense.regarding.expense_group.id,
+            ActionLog.objects.create(user=request.user, expense_group_id=expense.regarding.expense_group.id,
                                      type=ActionLog.ActionTypes.DELETE,
                                      description=f"Deletou a despesa {expense.name}")
         return response
@@ -244,14 +287,14 @@ class ExpenseViewSet(viewsets.ModelViewSet):
     @transaction.atomic
     def create(self, request, *args, **kwargs):
         print(request.data)
-        expense_data = {**request.data, "created_by_id": 1}
+        expense_data = {**request.data, "created_by_id": request.user.id}
         expense_data["cost"] = expense_data["cost"].replace(".", "").replace(",", ".")
-        expense_data['created_by'] = 1
+        expense_data['created_by'] = request.user.id
         expense_serializer = self.get_serializer(data=expense_data)
         expense_serializer.is_valid(raise_exception=True)
         self.perform_create(expense_serializer)
         regarding = Regarding.objects.get(id=expense_data['regarding'])
-        ActionLog.objects.create(user_id=1, expense_group_id=regarding.expense_group.id, type=ActionLog.ActionTypes.CREATE,
+        ActionLog.objects.create(user=request.user, expense_group_id=regarding.expense_group.id, type=ActionLog.ActionTypes.CREATE,
                                  description=f"Criou a despesa {expense_data['name']} de valor R$ {expense_data['cost']}")
 
         expense = Expense.objects.last()
@@ -420,7 +463,7 @@ class ExpenseViewSet(viewsets.ModelViewSet):
                     changes[field_name_pt] = changes[field_name_pt][:-2] + '.'
                 if not changes[field_name_pt]:
                     del changes[field_name_pt]
-        ActionLog.objects.create(user_id=1, expense_group_id=expense.regarding.expense_group.id,
+        ActionLog.objects.create(user=request.user, expense_group_id=expense.regarding.expense_group.id,
                                  type=ActionLog.ActionTypes.UPDATE,
                                  description=f"Atualizou a despesa {expense_data['name']}", changes_json=changes)
         return Response(expense_serializer.data, status=status.HTTP_200_OK, headers=headers)
@@ -454,16 +497,45 @@ class UserViewSet(viewsets.ModelViewSet):
     serializer_class = UserSerializer
     permission_classes = [permissions.IsAuthenticated]
 
+    def list(self, request, *args, **kwargs):
+        queryset = self.filter_queryset(self.get_queryset())
+
+        page = self.paginate_queryset(queryset)
+        if page is not None:
+            serializer = self.get_serializer(page, many=True)
+            return self.get_paginated_response(serializer.data)
+
+        serializer = self.get_serializer(queryset, many=True)
+        users_data = serializer.data
+        for user in users_data:
+            invitations = GroupInvitation.objects.filter(invited_id=user['id'], status=GroupInvitation.InvitationStatus.AWAITING)
+            user['invitations_received'] = GroupInvitationSerializer(invitations, many=True).data
+        return Response(serializer.data)
+
 
 
 class JoinGroup(views.APIView):
     permission_classes = [permissions.IsAuthenticated]
+    @transaction.atomic
     def get(self, request, hash, format=None):
         try:
             group = ExpenseGroup.objects.get(hash_id=hash)
             user = request.user
+            new_user_full_name = f"{user.first_name} {user.last_name}".strip()
             if group not in user.expenses_groups.all():
-                membership = Membership.objects.create(group=group, user=user)
+                for membership in group.memberships.all():
+                    Notification.objects.create(
+                        title=f"Novo membro no grupo {group.name}",
+                        body=f"O usuário {new_user_full_name} entrou no grupo",
+                        user=membership.user,
+                    )
+                Membership.objects.create(group=group, user=user)
+                Notification.objects.create(
+                    title=f"Bem vindo ao grupo {group.name}",
+                    body=f"Agora você já pode ver e criar despesas nesse grupo.",
+                    user=user,
+                )
+
             else:
                 return Response(status=status.HTTP_400_BAD_REQUEST, data={"detail": "Você já faz parte desse grupo"})
         except ExpenseGroup.DoesNotExist:
@@ -483,7 +555,7 @@ class NotificationViewSet(viewsets.ModelViewSet):
 
     def get_queryset(self):
         self.queryset = self.request.user.notifications.all()
-        return self.queryset
+        return self.queryset.order_by("-created_at")
 
 
 
@@ -504,6 +576,23 @@ class ValidationViewSet(viewsets.ModelViewSet):
         else:
             return ValidationSerializerReader
 
+    @transaction.atomic
+    def partial_update(self, request, pk=None, *args, **kwargs):
+        print(request.data, pk)
+        response = super().update(request, *args, **kwargs)
+        obj = Validation.objects.get(pk=pk)
+        expense_validations = Validation.objects.filter(expense=obj.expense)
+        validated = expense_validations.filter(validated_at__isnull=False)
+        rejected = expense_validations.filter(validated_at__isnull=True, is_active=False)
+        if expense_validations.count() == validated.count():
+            obj.expense.validation_status = Expense.ValidationStatuses.VALIDATED
+        elif expense_validations.count() == rejected.count():
+            obj.expense.validation_status = Expense.ValidationStatuses.REJECTED
+        else:
+            obj.expense.validation_status = Expense.ValidationStatuses.AWAITING
+        obj.expense.save(update_fields=['validation_status'])
+        return response
+
 
 class ActionsLogViewSet(viewsets.ModelViewSet):
     queryset = ActionLog.objects.all()
@@ -515,8 +604,54 @@ class ActionsLogViewSet(viewsets.ModelViewSet):
         return self.queryset.order_by("-created_at")
 
 
+class GroupInvitationViewSet(viewsets.ModelViewSet):
+    queryset = GroupInvitation.objects.all()
+    serializer_class = GroupInvitationSerializer
+    permission_classes = [permissions.IsAuthenticated]
+
+    def get_queryset(self):
+        user = self.request.user
+        self.queryset = self.queryset.filter((Q(sent_by_id=user.id) | Q(invited_id=user.id)) & Q(status=GroupInvitation.InvitationStatus.AWAITING))
+        return self.queryset.order_by("-created_at")
+
+    @transaction.atomic
+    def partial_update(self, request, pk=None, *args, **kwargs):
+        print(request.data, pk)
+        obj = GroupInvitation.objects.get(pk=pk)
+        obj.status = request.data.get("status", obj.status)
+        obj.save(update_fields=['status'])
+        invited = f"{obj.invited.first_name + ' ' + obj.invited.last_name}".strip()
+        sent_by = f"{obj.sent_by.first_name + ' ' + obj.sent_by.last_name}".strip()
+        if obj.status == GroupInvitation.InvitationStatus.ACCEPTED:
+            ActionLog.objects.create(user=request.user, expense_group=obj.expense_group,
+                                     type=ActionLog.ActionTypes.UPDATE,
+                                     description=f"{invited} aceitou o convite de {sent_by}", changes_json={})
+            Notification.objects.create(
+                title="Convite aceito",
+                body=f"{invited} aceitou o seu convite para se juntar ao grupo {obj.expense_group.name}",
+                user=obj.sent_by,
+            )
+            for membership in obj.expense_group.memberships.all():
+                Notification.objects.create(
+                    title=f"Novo membro no grupo {obj.expense_group.name}",
+                    body=f"O usuário {invited} entrou no grupo",
+                    user=membership.user,
+                )
+            Membership.objects.create(group=obj.expense_group, user=request.user)
+
+        else:
+            Notification.objects.create(
+                title="Convite rejeitado",
+                body=f"{invited} rejeitou o seu convite para se juntar ao grupo {obj.expense_group.name}",
+                user=obj.sent_by,
+            )
+        return Response(data=GroupInvitationSerializer(obj).data, status=status.HTTP_200_OK)
+
+
 class Login(views.APIView):
     authentication_classes = []
+
+    @transaction.atomic
     def post(self, request, format=None):
         data = request.data
 
@@ -562,6 +697,7 @@ class Login(views.APIView):
 
 class Register(views.APIView):
     authentication_classes = []
+    @transaction.atomic
     def post(self, request, format=None):
         data = request.data
         user_data = {
@@ -594,6 +730,11 @@ class Register(views.APIView):
                 instance, token = AuthToken.objects.create(user)
                 instance.expiry = datetime.now() + timedelta(days=+30)
                 instance.save()
+                Notification.objects.create(
+                    title="Bem vindo(a) ao App",
+                    body=f"Confira o tour pelo aplicativo para conhecer nossas funcionalidades",
+                    user=user,
+                )
 
                 return Response(data={'user': serializer.data, 'api_token': token, 'fcm_token': user.fcm_token},
                                 status=status.HTTP_200_OK)

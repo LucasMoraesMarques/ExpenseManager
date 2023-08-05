@@ -1,6 +1,6 @@
 from rest_framework import serializers
 from core.models import ExpenseGroup, Regarding, Wallet, PaymentMethod, Payment, Expense, Tag, Item, \
-    User, Notification, Validation, ActionLog
+    User, Notification, Validation, ActionLog, Membership, GroupInvitation
 from datetime import datetime
 from django.db.models import Sum
 from core.services import stats
@@ -27,7 +27,7 @@ class WalletSerializer(serializers.ModelSerializer):
     payment_methods = PaymentMethodSerializer(read_only=True, many=True)
     class Meta:
         model = Wallet
-        fields = ("payment_methods",)
+        fields = ("id", "payment_methods")
         depth = 1
 
 
@@ -42,14 +42,57 @@ class UserSerializer(serializers.ModelSerializer):
         return f"{obj.first_name} {obj.last_name}"
 
 
+
+class MemberSerializer(UserSerializer):
+    class Meta:
+        model = User
+        fields = ("id", "first_name", "last_name", "full_name")
+
+
+class MembershipSerializer(serializers.ModelSerializer):
+    user = MemberSerializer(read_only=True)
+    class Meta:
+        model = Membership
+        fields = "__all__"
+
+
+    def to_representation(self, instance):
+        ret = super().to_representation(instance)
+        level_index = Membership.Levels.values.index(ret['level'])
+        ret['level'] = Membership.Levels.labels[level_index].capitalize()
+        return ret
+
+
+class GroupInvitationSerializer(serializers.ModelSerializer):
+    sent_by = MemberSerializer(read_only=True)
+    invited = MemberSerializer(read_only=True)
+    group_name = serializers.SerializerMethodField()
+
+    class Meta:
+        model = GroupInvitation
+        fields = "__all__"
+
+    def to_representation(self, instance):
+        ret = super().to_representation(instance)
+        ret['created_at'] = instance.created_at.strftime("%d/%m/%Y")
+        status_index = GroupInvitation.InvitationStatus.values.index(ret['status'])
+        ret['status'] = GroupInvitation.InvitationStatus.labels[status_index].capitalize()
+        return ret
+
+    def get_group_name(self, obj):
+        return obj.expense_group.name
+
+
 class ExpenseGroupSerializerReader(serializers.ModelSerializer):
     number_of_regardings = serializers.SerializerMethodField()
     number_of_expenses = serializers.SerializerMethodField()
+    members = MemberSerializer(many=True, read_only=True)
+    memberships = MembershipSerializer(many=True, read_only=True)
+    invitations = GroupInvitationSerializer(many=True, read_only=True)
 
     class Meta:
         model = ExpenseGroup
         fields = "__all__"
-        depth = 2
 
     def to_representation(self, instance):
         ret = super().to_representation(instance)
@@ -270,6 +313,7 @@ class ExpenseSerializerReader(serializers.ModelSerializer):
     validations = ValidationSerializerReader(many=True)
     validation_status = serializers.SerializerMethodField()
     regarding_is_closed = serializers.SerializerMethodField()
+    expense_group = serializers.SerializerMethodField()
     class Meta:
         model = Expense
         fields = "__all__"
@@ -322,6 +366,9 @@ class ExpenseSerializerReader(serializers.ModelSerializer):
 
     def get_regarding_is_closed(self, obj):
         return obj.regarding.is_closed
+
+    def get_expense_group(self, obj):
+        return obj.regarding.expense_group.id
 
 
 class ExpenseSerializerForItem(serializers.ModelSerializer):

@@ -10,7 +10,7 @@ STATES = ['AC', 'AL', 'AP', 'AM', 'BA', 'CE', 'DF', 'ES', 'GO', 'MA', 'MT', 'MS'
 STATES_CHOICES = [(state, state) for state in STATES]
 
 class User(AbstractUser):
-    phone = PhoneNumberField('Phone Number', null=True, blank=True)
+    phone = models.CharField('Phone Number', max_length=20, null=True, blank=True)
     street = models.CharField("Street", max_length=128, null=True, blank=True)
     district = models.CharField("District", max_length=128, null=True, blank=True)
     address_number = models.IntegerField("Number", null=True, blank=True)
@@ -46,11 +46,15 @@ class ExpenseGroup(BaseModel):
 
 
 class Membership(models.Model):
+    class Levels(models.TextChoices):
+        ADMIN = ("ADMIN", "ADMINISTRADOR")
+        EDITOR = ("EDITOR", "EDITOR")
+        READER = ("READER", "LEITOR")
     group = models.ForeignKey("ExpenseGroup", related_name="memberships", on_delete=models.CASCADE)
     user = models.ForeignKey("User", related_name="my_memberships", on_delete=models.CASCADE)
     joined_at = models.DateField("Join date", auto_now_add=True)
     average_weight = models.DecimalField("Weight for shared total", null=True, max_digits=7, decimal_places=4, blank=True, default=1)
-
+    level = models.TextField("Level", choices=Levels.choices, default=Levels.EDITOR)
 
 
 class Regarding(BaseModel):
@@ -169,3 +173,14 @@ class ActionLog(BaseModel):
     type = models.CharField("Action type", default=ActionTypes.CREATE, max_length=128, choices=ActionTypes.choices)
     description = models.TextField("Description", null=True, blank=True)
     changes_json = models.JSONField("Changes JSON", default=dict, null=True, blank=True)
+
+
+class GroupInvitation(BaseModel):
+    class InvitationStatus(models.TextChoices):
+        AWAITING = ("AWAITING", "PENDENTE")
+        ACCEPTED = ("ACCEPTED", "ACEITO")
+        REJECTED = ("REJECTED", "REJEITADO")
+    sent_by = models.ForeignKey("User", on_delete=models.CASCADE, related_name="invitations_sent", null=True, blank=True)
+    invited = models.ForeignKey("User", on_delete=models.CASCADE, related_name="invitations_received", null=True, blank=True)
+    expense_group = models.ForeignKey("ExpenseGroup", related_name="invitations", on_delete=models.CASCADE)
+    status = models.CharField("Status", default=InvitationStatus.AWAITING, max_length=128, choices=InvitationStatus.choices)
