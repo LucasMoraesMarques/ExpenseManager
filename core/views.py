@@ -48,15 +48,31 @@ class ExpenseGroupViewSet(viewsets.ModelViewSet):
         response = super().create(request, *args, **kwargs)
         if response.status_code == 201:
             group = ExpenseGroup.objects.filter(name=request.data['name']).last()
-            Membership.objects.create(group=group, user=request.user)
-            ActionLog.objects.create(user=request.user, expense_group_id=group.id,
-                                     type=ActionLog.ActionTypes.CREATE,
-                                     description=f"Criou o grupo {group.name}")
+            Membership.objects.create(group=group, user=request.user, level=Membership.Levels.ADMIN)
+
             Notification.objects.create(
                 title=f"Novo grupo criado",
                 body=f"O grupo {group.name} foi criado com sucesso!",
                 user=request.user,
             )
+            changes = {}
+            invitations = request.data.get("invitations", [])
+            field_name_pt = FIELDS_NAMES_PT["invitations"]
+            changes[field_name_pt] = ''
+            for invitation in invitations:
+                group_invitation = GroupInvitation.objects.create(sent_by_id=invitation['sent_by']['id'],
+                                                                  invited_id=invitation['invited']['id'],
+                                                                  expense_group_id=group.id)
+                group_invitation.save()
+                changes[field_name_pt] += f"\nConvidou o usuário {invitation['invited']['full_name']}"
+                Notification.objects.create(
+                    title=f"Convite para o grupo {group.name}",
+                    body=f"{invitation['sent_by']['full_name']} te convidou para entrar no grupo {group.name}",
+                    user_id=invitation['invited']['id'],
+                )
+            ActionLog.objects.create(user=request.user, expense_group_id=group.id,
+                                     type=ActionLog.ActionTypes.CREATE,
+                                     description=f"Criou o grupo {group.name}", changes_json=changes)
         return response
 
     @transaction.atomic
