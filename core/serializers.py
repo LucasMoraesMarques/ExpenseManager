@@ -138,13 +138,15 @@ class RegardingSerializerReader(serializers.ModelSerializer):
         return obj.expense_group.name
 
     def get_general_total(self, obj):
-        self.user = User.objects.get(id=6)
+        self.user = self.context["request"].user
+        print(self.user)
         if obj.is_closed:
             totals = json.loads(obj.balance_json)
             self.general_total = totals.get('general_total', {})
             self.consumer_total = totals.get('consumer_total', {})
             self.total_by_day = totals.get('total_by_day', {})
             self.total_member_vs_member = totals.get('total_member_vs_member', {})
+            user_data = self.consumer_total.get(str(self.user.id), {})
         else:
             self.general_total = {
                 "regarding": obj.id,
@@ -161,33 +163,25 @@ class RegardingSerializerReader(serializers.ModelSerializer):
             self.total_member_vs_member = {}
             if obj.expenses.count():
                 items = ItemSerializerReader(Item.objects.filter(expense__regarding__id=obj.id), many=True).data
-                self.general_total, self.consumer_total, self.total_by_day, self.total_member_vs_member = stats.calc_totals_by_regarding(obj.id, items)
-        print("dsfds", self.consumer_total)
-
-        user_data = list(filter(lambda x: x["payments__payer"] == self.user.id, self.consumer_total))
-        print(user_data)
+                self.general_total, self.consumer_total, self.total_by_day, self.total_member_vs_member = stats.calculate_totals_of_regarding(obj, items)
+            user_data = self.consumer_total.get(self.user.id, {})
         if user_data:
-            self.personal_total = user_data[0]
+            self.personal_total = user_data
         else:
             self.personal_total = {
-            "payments__payer": self.user.id,
-            "total_expenses": 0,
-            "total_payments": 0,
-            "total_validation": 0,
-            "total_open": 0,
-            "total_paid": 0,
-            "total_overdue": 0,
             "shared": 0,
             "partial_shared": 0,
             "individual": 0,
             "total_paid_shared": 0,
+            "weight": 1.0,
+            "full_name": f"{self.user.first_name} {self.user.last_name}",
             "expected_total_paid": 0,
             "balance": 0
         }
         return self.general_total
 
     def get_consumer_total(self, obj):
-        return list(self.consumer_total)
+        return self.consumer_total
 
     def get_personal_total(self, obj):
         if not self.has_expenses:

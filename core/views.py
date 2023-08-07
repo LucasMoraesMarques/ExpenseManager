@@ -33,7 +33,7 @@ class ExpenseGroupViewSet(viewsets.ModelViewSet):
 
     def get_queryset(self):
         self.queryset = self.request.user.expenses_groups.all()
-        self.queryset = self.queryset.prefetch_related("regardings", "regardings__expenses")
+        self.queryset = self.queryset.prefetch_related("regardings", "regardings__expenses", "memberships", "invitations")
         return self.queryset
 
     def get_serializer_class(self):
@@ -162,7 +162,7 @@ class RegardingViewSet(viewsets.ModelViewSet):
     permission_classes = [permissions.IsAuthenticated]
 
     def get_queryset(self):
-        self.queryset = self.queryset.filter(expense_group__in=self.request.user.expenses_groups.all())
+        self.queryset = self.queryset.filter(expense_group__in=self.request.user.expenses_groups.all()).prefetch_related("expenses")
         return self.queryset
 
 
@@ -208,7 +208,6 @@ class RegardingViewSet(viewsets.ModelViewSet):
         if request.data.get("is_closed", False):
             regarding_serializer = RegardingSerializerReader(obj, context={"request": request})
             totals = regarding_serializer.data
-            print(totals)
             obj.balance_json = json.dumps({
                 "general_total": totals.get('general_total', {}),
                 "consumer_total": totals.get('consumer_total', []),
