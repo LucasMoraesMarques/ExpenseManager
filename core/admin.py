@@ -16,7 +16,7 @@ class MembershipAdmin(admin.ModelAdmin):
 
 @admin.register(Regarding)
 class RegardingGroupAdmin(admin.ModelAdmin):
-    pass
+    list_display = ("__str__", "start_date", "end_date", "is_closed")
 
 
 @admin.register(Wallet)
@@ -31,12 +31,12 @@ class PaymentMethodAdmin(admin.ModelAdmin):
 
 @admin.register(Payment)
 class PaymentAdmin(admin.ModelAdmin):
-    pass
+    list_display = ['payer', 'payment_method', 'expense', 'payment_status']
 
 
 @admin.register(Expense)
 class ExpenseAdmin(admin.ModelAdmin):
-    list_display = ['__str__', 'payer']
+    list_display = ['__str__', 'payer', "validation_status"]
 
 
     def payer(self, obj):

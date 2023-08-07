@@ -1,3 +1,4 @@
+import requests
 from rest_framework import serializers
 from core.models import ExpenseGroup, Regarding, Wallet, PaymentMethod, Payment, Expense, Tag, Item, \
     User, Notification, Validation, ActionLog, Membership, GroupInvitation
@@ -138,10 +139,12 @@ class RegardingSerializerReader(serializers.ModelSerializer):
         return obj.expense_group.name
 
     def get_general_total(self, obj):
-        self.user = self.context["request"].user
-        print(self.user)
+        if type(self.context["request"]) == dict:
+            self.user = self.context["request"].get("user")
+        else:
+            self.user = self.context["request"].user
         if obj.is_closed:
-            totals = json.loads(obj.balance_json)
+            totals = json.loads(obj.balance_json) if type(obj.balance_json) == str else {}
             self.general_total = totals.get('general_total', {})
             self.consumer_total = totals.get('consumer_total', {})
             self.total_by_day = totals.get('total_by_day', {})
