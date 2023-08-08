@@ -114,6 +114,13 @@ class Expense(BaseModel):
         AWAITING = ("VALIDATION", "PENDENTE")
         VALIDATED = ("VALIDATED", "VALIDADA")
         REJECTED = ("REJECTED", "REJEITADA")
+
+    class PaymentStatuses(models.TextChoices):
+        AWAITING_VALIDATION = ("VALIDATION", "EM VALIDAÇÃO")
+        AWAITING_PAYMENT = ("AWAITING", "AGUARDANDO PAGAMENTO")
+        PAID = ("PAID", "PAGO")
+        OVERDUE = ("OVERDUE", "VENCIDO")
+
     name = models.CharField("Name", max_length=128)
     description = models.TextField("Description", null=True, blank=True)
     regarding = models.ForeignKey("Regarding", related_name="expenses", on_delete=models.CASCADE)
@@ -122,6 +129,7 @@ class Expense(BaseModel):
     validated_by = models.ManyToManyField("User", through="Validation", blank=True, null=True)
     validation_status = models.CharField("Validation Status", default=ValidationStatuses.AWAITING, max_length=128, choices=ValidationStatuses.choices)
     created_by = models.ForeignKey("User", related_name="created_expenses", on_delete=models.CASCADE, blank=True, null=True)
+    payment_status = models.CharField("Payment Status", default=PaymentStatuses.AWAITING_VALIDATION, max_length=128, choices=PaymentStatuses.choices)
 
     def __str__(self):
         return f"{self.regarding.expense_group} - {self.regarding.name} - {self.name} - R${self.cost:.2f}"

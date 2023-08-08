@@ -33,7 +33,7 @@ class ExpenseGroupViewSet(viewsets.ModelViewSet):
 
     def get_queryset(self):
         self.queryset = self.request.user.expenses_groups.all()
-        self.queryset = self.queryset.prefetch_related("regardings", "regardings__expenses", "memberships", "invitations")
+        self.queryset = self.queryset.prefetch_related("regardings", "regardings__expenses", "members", "memberships", "memberships__user", "invitations", "invitations__sent_by", "invitations__invited")
         return self.queryset
 
     def get_serializer_class(self):
@@ -162,8 +162,8 @@ class RegardingViewSet(viewsets.ModelViewSet):
     permission_classes = [permissions.IsAuthenticated]
 
     def get_queryset(self):
-        self.queryset = self.queryset.filter(expense_group__in=self.request.user.expenses_groups.all()).prefetch_related("expenses")
-        return self.queryset
+        self.queryset = self.queryset.select_related("expense_group").prefetch_related("expenses", "expenses__validations", "expenses__validations__validator")
+        return self.queryset.filter(expense_group__in=self.request.user.expenses_groups.all())
 
 
     def get_serializer_class(self):
@@ -224,7 +224,7 @@ class WalletViewSet(viewsets.ModelViewSet):
     permission_classes = [permissions.IsAuthenticated]
 
     def get_queryset(self):
-        self.queryset = self.queryset.filter(owner=self.request.user)
+        self.queryset = self.queryset.filter(owner=self.request.user).prefetch_related("payment_methods", "payment_methods__payments")
         return self.queryset
 
 
@@ -235,14 +235,13 @@ class PaymentMethodViewSet(viewsets.ModelViewSet):
     permission_classes = [permissions.IsAuthenticated]
 
     def get_queryset(self):
-        print(self.request.user, self.request.user.wallet)
-        self.queryset = self.queryset.filter(wallet=self.request.user.wallet)
+        self.queryset = self.queryset.filter(wallet=self.request.user.wallet).prefetch_related("payments")
         return self.queryset
 
 
 
 class PaymentViewSet(viewsets.ModelViewSet):
-    queryset = Payment.objects.all()
+    queryset = Payment.objects.all().select_related("expense", "expense__regarding__expense_group", "payment_method", "payer").prefetch_related("expense__validations", "expense__validations__validator", "expense__validated_by")
     serializer_class = PaymentSerializerReader
     permission_classes = [permissions.IsAuthenticated]
 
@@ -253,15 +252,13 @@ class PaymentViewSet(viewsets.ModelViewSet):
 
 
 class ExpenseViewSet(viewsets.ModelViewSet):
-    queryset = Expense.objects.all().order_by("date")
+    queryset = Expense.objects.all().select_related("regarding", "regarding__expense_group", "created_by").prefetch_related("payments", "payments__payer", "payments__payment_method", "payments__expense", "validations", "validations__validator", "validations__validator__wallet", "validations__validator__wallet__payment_methods", "validations__validator__wallet__payment_methods__payments", "validated_by", "items", "items__consumers", "regarding__expense_group__members")
     serializer_class = ExpenseSerializerReader
     permission_classes = [permissions.IsAuthenticated]
 
     def get_queryset(self):
         self.queryset = self.queryset.filter(regarding__expense_group__in=self.request.user.expenses_groups.all())
-        return self.queryset
-
-
+        return self.queryset.order_by("date")
 
     def get_serializer_class(self):
         method = self.request.method
@@ -497,7 +494,7 @@ class TagViewSet(viewsets.ModelViewSet):
 
 
 class ItemViewSet(viewsets.ModelViewSet):
-    queryset = Item.objects.all()
+    queryset = Item.objects.all().select_related("expense", "expense__regarding", "expense__regarding__expense_group").prefetch_related("expense__validated_by", "expense__payments", "expense__payments__payment_method", "expense__payments__payer",  "consumers")
     serializer_class = ItemSerializerReader
     permission_classes = [permissions.IsAuthenticated]
 
@@ -508,7 +505,7 @@ class ItemViewSet(viewsets.ModelViewSet):
 
 
 class UserViewSet(viewsets.ModelViewSet):
-    queryset = User.objects.all()
+    queryset = User.objects.all().select_related("wallet").prefetch_related("wallet__payment_methods", "wallet__payment_methods__payments", "expenses_groups")
     serializer_class = UserSerializer
     permission_classes = [permissions.IsAuthenticated]
 
@@ -523,7 +520,7 @@ class UserViewSet(viewsets.ModelViewSet):
         serializer = self.get_serializer(queryset, many=True)
         users_data = serializer.data
         for user in users_data:
-            invitations = GroupInvitation.objects.filter(invited_id=user['id'], status=GroupInvitation.InvitationStatus.AWAITING)
+            invitations = GroupInvitation.objects.select_related("invited", "sent_by", "expense_group").filter(invited_id=user['id'], status=GroupInvitation.InvitationStatus.AWAITING)
             user['invitations_received'] = GroupInvitationSerializer(invitations, many=True).data
         return Response(serializer.data)
 
@@ -575,7 +572,7 @@ class NotificationViewSet(viewsets.ModelViewSet):
 
 
 class ValidationViewSet(viewsets.ModelViewSet):
-    queryset = Validation.objects.all()
+    queryset = Validation.objects.all().select_related("expense", "expense__regarding","expense__regarding__expense_group", "validator", "validator__wallet").prefetch_related("expense__validated_by", "expense__created_by", "validator__wallet__payment_methods", "validator__wallet__payment_methods__payments")
     serializer_class = ValidationSerializerReader
     permission_classes = [permissions.IsAuthenticated]
 
@@ -610,7 +607,7 @@ class ValidationViewSet(viewsets.ModelViewSet):
 
 
 class ActionsLogViewSet(viewsets.ModelViewSet):
-    queryset = ActionLog.objects.all()
+    queryset = ActionLog.objects.all().select_related("expense_group", "user", "user__wallet").prefetch_related("user__wallet__payment_methods", "user__wallet__payment_methods__payments")
     serializer_class = ActionLogSerializer
     permission_classes = [permissions.IsAuthenticated]
 
@@ -620,7 +617,7 @@ class ActionsLogViewSet(viewsets.ModelViewSet):
 
 
 class GroupInvitationViewSet(viewsets.ModelViewSet):
-    queryset = GroupInvitation.objects.all()
+    queryset = GroupInvitation.objects.all().select_related("sent_by", "invited", "expense_group")
     serializer_class = GroupInvitationSerializer
     permission_classes = [permissions.IsAuthenticated]
 

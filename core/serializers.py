@@ -15,7 +15,7 @@ class PaymentMethodSerializer(serializers.ModelSerializer):
     number_of_payments = serializers.SerializerMethodField()
     class Meta:
         model = PaymentMethod
-        fields = "__all__"
+        exclude = ("created_at", "updated_at")
 
     def get_has_payments(self, obj):
         return obj.payments.count() > 0
@@ -37,7 +37,7 @@ class UserSerializer(serializers.ModelSerializer):
     wallet = WalletSerializer(read_only=True)
     class Meta:
         model = User
-        fields = "__all__"
+        exclude = ("password", "last_login", "is_superuser", "is_staff", "is_active", "date_joined", "groups", "user_permissions")
 
     def get_full_name(self, obj):
         return f"{obj.first_name} {obj.last_name}"
@@ -71,7 +71,7 @@ class GroupInvitationSerializer(serializers.ModelSerializer):
 
     class Meta:
         model = GroupInvitation
-        fields = "__all__"
+        exclude = ("updated_at",)
 
     def to_representation(self, instance):
         ret = super().to_representation(instance)
@@ -93,7 +93,7 @@ class ExpenseGroupSerializerReader(serializers.ModelSerializer):
 
     class Meta:
         model = ExpenseGroup
-        fields = "__all__"
+        exclude = ("updated_at",)
 
     def to_representation(self, instance):
         ret = super().to_representation(instance)
@@ -133,7 +133,7 @@ class RegardingSerializerReader(serializers.ModelSerializer):
 
     class Meta:
         model = Regarding
-        fields = "__all__"
+        exclude = ("created_at", "updated_at")
 
     def get_group_name(self, obj):
         return obj.expense_group.name
@@ -165,7 +165,8 @@ class RegardingSerializerReader(serializers.ModelSerializer):
             self.total_by_day = {}
             self.total_member_vs_member = {}
             if obj.expenses.count():
-                items = ItemSerializerReader(Item.objects.filter(expense__regarding__id=obj.id), many=True).data
+                items = Item.objects.select_related("expense", "expense__regarding").prefetch_related("consumers", "expense__payments", "expense__payments__payer", "expense__payments__payment_method", "expense__validated_by").filter(expense__regarding__id=obj.id)
+                items = ItemSerializerReader(items, many=True).data
                 self.general_total, self.consumer_total, self.total_by_day, self.total_member_vs_member = stats.calculate_totals_of_regarding(obj, items)
             user_data = self.consumer_total.get(self.user.id, {})
         if user_data:
@@ -232,7 +233,7 @@ class PaymentSerializerReader(serializers.ModelSerializer):
     payer_name = serializers.SerializerMethodField()
     class Meta:
         model = Payment
-        fields = "__all__"
+        exclude = ("created_at", "updated_at")
         depth = 1
 
     def get_payer_name(self, obj):
@@ -287,7 +288,7 @@ class ValidationSerializerReader(serializers.ModelSerializer):
 
     class Meta:
         model = Validation
-        fields = "__all__"
+        exclude = ("updated_at",)
         depth = 1
 
     def get_requested_by(self, obj):
@@ -322,7 +323,6 @@ class ExpenseSerializerReader(serializers.ModelSerializer):
     payments = PaymentSerializerReader(many=True)
     items = ItemSerializerForExpense(many=True)
     regarding_name = serializers.SerializerMethodField()
-    payment_status = serializers.SerializerMethodField()
     shared_total = serializers.SerializerMethodField()
     individual_total = serializers.SerializerMethodField()
     validations = ValidationSerializerReader(many=True)
@@ -331,7 +331,7 @@ class ExpenseSerializerReader(serializers.ModelSerializer):
     expense_group = serializers.SerializerMethodField()
     class Meta:
         model = Expense
-        fields = "__all__"
+        exclude = ("created_at", "updated_at")
 
     def get_regarding_name(self, obj):
         return obj.regarding.name
@@ -340,18 +340,10 @@ class ExpenseSerializerReader(serializers.ModelSerializer):
         ret = super().to_representation(instance)
         ret['cost'] = format_decimal(instance.cost, locale="pt_BR", format="#.###,00")
         ret['date'] = instance.date.strftime("%d/%m/%Y")
+        index = Expense.PaymentStatuses.values.index(instance.payment_status)
+        ret['payment_status'] = Expense.PaymentStatuses.labels[index].capitalize()
         return ret
 
-    def get_payment_status(self, obj):
-        payments_statuses = list(obj.payments.values_list("payment_status", flat=True))
-        if "VALIDATION" in payments_statuses:
-            return "Em validação"
-        elif "AWAITING" in payments_statuses:
-            return "Aguardando"
-        elif "OVERDUE" in payments_statuses:
-            return "Vencido"
-        elif "PAID" in payments_statuses:
-            return "Pago"
 
     def get_validation_status(self, obj):
         if obj.validation_status == Expense.ValidationStatuses.AWAITING:
@@ -366,9 +358,8 @@ class ExpenseSerializerReader(serializers.ModelSerializer):
         individual = 0
         shared = 0
         members = obj.regarding.expense_group.members.all()
-        members_ids = list(members.values_list("id", flat=True))
         for item in items:
-            if set(item["consumers"]) == set(members_ids):
+            if len(item["consumers"]) == len(members):
                 shared += Decimal(item["price"])
             elif len(item["consumers"]) == 1 and item["consumers"][0] == self.context["request"].user.id:
                 individual += Decimal(item["price"])
@@ -390,7 +381,7 @@ class ExpenseSerializerForItem(serializers.ModelSerializer):
     payments = PaymentSerializerReader(many=True)
     class Meta:
         model = Expense
-        fields = "__all__"
+        exclude = ("created_at", "updated_at")
 
 
 class TagSerializer(serializers.ModelSerializer):
