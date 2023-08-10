@@ -36,6 +36,7 @@ CORS_ALLOWED_ORIGINS = [
 "http://192.168.0.104:3000"
 ]
 
+CORS_ALLOW_ALL_ORIGINS =True
 
 # Application definition
 
