@@ -11,7 +11,7 @@ https://docs.djangoproject.com/en/4.1/ref/settings/
 """
 
 from pathlib import Path
-from decouple import config
+from decouple import config, Csv
 import os
 
 # Build paths inside the project like this: BASE_DIR / 'subdir'.
@@ -27,18 +27,15 @@ SECRET_KEY = "django-insecure-v0jm6@@@5f8b8av610l9f69go@54m#94a@)mo)myau8(1()r=6
 # SECURITY WARNING: don't run with debug turned on in production!
 DEBUG = config("DEBUG", cast=bool)
 
-ALLOWED_HOSTS = ["*"]
+CORS_ALLOWED_ORIGINS = config('CORS_ALLOWED_ORIGINS', default="*", cast=Csv())
+CORS_ORIGIN_ALLOW_ALL = config("CORS_ORIGIN_ALLOW_ALL", cast=bool)
+if DEBUG:
+    ALLOWED_HOSTS = ['*']
+else:
+    ALLOWED_HOSTS = config('ALLOWED_HOSTS', default="*", cast=Csv())
 
-CORS_ALLOWED_ORIGINS = [
-'http://127.0.0.1:3000', #For React Project
-'http://localhost:3000',
-'http://127.0.0.1:8000',  #For Django Project
-'http://192.168.0.107:3000',
-"http://192.168.0.105:3000",
-"http://192.168.0.104:3000"
-]
-
-CORS_ALLOW_ALL_ORIGINS =True
+CSRF_TRUSTED_ORIGINS = config('CSRF_TRUSTED_ORIGINS', default="*", cast=Csv())
+CORS_ORIGIN_WHITELIST = config('CORS_ORIGIN_WHITELIST', default="*", cast=Csv())
 
 # Application definition
 
