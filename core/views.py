@@ -577,7 +577,7 @@ class ValidationViewSet(viewsets.ModelViewSet):
     permission_classes = [permissions.IsAuthenticated]
 
     def get_queryset(self):
-        self.queryset = self.queryset.filter(expense__regarding__expense_group__in=self.request.user.expenses_groups.all())
+        self.queryset = self.request.user.requested_validations.all()
         return self.queryset
 
 
