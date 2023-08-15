@@ -26,6 +26,7 @@ pycparser==2.21
 python-decouple==3.8
 pytz==2022.1
 requests==2.31.0
+sentry-sdk==1.29.2
 sqlparse==0.4.2
 tomli==2.0.1
 typing_extensions==4.7.1
