@@ -577,7 +577,7 @@ class ValidationViewSet(viewsets.ModelViewSet):
     permission_classes = [permissions.IsAuthenticated]
 
     def get_queryset(self):
-        self.queryset = self.request.user.requested_validations.all()
+        self.queryset = self.queryset.filter(validator=self.request.user)
         return self.queryset
 
 

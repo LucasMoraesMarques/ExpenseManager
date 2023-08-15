@@ -13,6 +13,8 @@ https://docs.djangoproject.com/en/4.1/ref/settings/
 from pathlib import Path
 from decouple import config, Csv
 import os
+import sentry_sdk
+from sentry_sdk.integrations.django import DjangoIntegration
 
 # Build paths inside the project like this: BASE_DIR / 'subdir'.
 BASE_DIR = Path(__file__).resolve().parent.parent
@@ -170,3 +172,10 @@ if DEBUG:
         '192.168.0.104'
     ]
 STATICFILES_STORAGE = 'whitenoise.storage.CompressedStaticFilesStorage'
+sentry_sdk.init(
+    dsn=config("SENTRY_DSN", default=''),
+    integrations=[DjangoIntegration()],
+    send_default_pii=True,
+    traces_sample_rate=1.0,
+    profiles_sample_rate=1.0,
+)
