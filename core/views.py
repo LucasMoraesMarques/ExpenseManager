@@ -742,6 +742,7 @@ class Register(views.APIView):
                 instance, token = AuthToken.objects.create(user)
                 instance.expiry = datetime.now() + timedelta(days=+30)
                 instance.save()
+                Wallet.objects.create(owner=user)
                 Notification.objects.create(
                     title="Bem vindo(a) ao App",
                     body=f"Confira o tour pelo aplicativo para conhecer nossas funcionalidades",
