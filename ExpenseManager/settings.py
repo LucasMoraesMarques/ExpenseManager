@@ -161,7 +161,7 @@ REST_FRAMEWORK = {
     ],
     'DEFAULT_SCHEMA_CLASS': 'rest_framework.schemas.coreapi.AutoSchema'
 }
-FCM_SERVER_KEY=''
+FCM_SERVER_KEY=config("FCM_SERVER_KEY", default="")
 
 if DEBUG:
     INSTALLED_APPS.append("debug_toolbar")

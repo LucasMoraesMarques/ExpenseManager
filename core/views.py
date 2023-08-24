@@ -13,7 +13,7 @@ from knox.models import AuthToken
 from datetime import datetime, timedelta
 from django.db import transaction
 import json
-
+from core.services import push_notifications
 FIELDS_NAMES_PT = {
     'name': 'nome',
     'description': 'descrição',
@@ -50,11 +50,12 @@ class ExpenseGroupViewSet(viewsets.ModelViewSet):
             group = ExpenseGroup.objects.filter(name=request.data['name']).last()
             Membership.objects.create(group=group, user=request.user, level=Membership.Levels.ADMIN)
 
-            Notification.objects.create(
+            notification = Notification.objects.create(
                 title=f"Novo grupo criado",
                 body=f"O grupo {group.name} foi criado com sucesso!",
                 user=request.user,
             )
+            push_notifications.send_notification(notification)
             changes = {}
             invitations = request.data.get("invitations", [])
             field_name_pt = FIELDS_NAMES_PT["invitations"]
@@ -65,11 +66,12 @@ class ExpenseGroupViewSet(viewsets.ModelViewSet):
                                                                   expense_group_id=group.id)
                 group_invitation.save()
                 changes[field_name_pt] += f"\nConvidou o usuário {invitation['invited']['full_name']}"
-                Notification.objects.create(
+                notification = Notification.objects.create(
                     title=f"Convite para o grupo {group.name}",
                     body=f"{invitation['sent_by']['full_name']} te convidou para entrar no grupo {group.name}",
                     user_id=invitation['invited']['id'],
                 )
+                push_notifications.send_notification(notification)
             ActionLog.objects.create(user=request.user, expense_group_id=group.id,
                                      type=ActionLog.ActionTypes.CREATE,
                                      description=f"Criou o grupo {group.name}", changes_json=changes)
@@ -101,11 +103,12 @@ class ExpenseGroupViewSet(viewsets.ModelViewSet):
                         obj.refresh_from_db()
                         user_editor_full_name = f"{request.user.first_name + ' ' + request.user.last_name}".strip()
                         for member in removed_members:
-                            Notification.objects.create(
+                            notification = Notification.objects.create(
                                 title=f"Você foi removido(a) do grupo {obj.name}",
                                 body=f"O membro {user_editor_full_name} removeu você do grupo. Se acha que isso foi um engano, contate-o.",
                                 user=member,
                             )
+                            push_notifications.send_notification(notification)
                             obj.memberships.filter(user=member).delete()
                         for member in new_members:
                             Membership.objects.create(group=obj, user=member)
@@ -143,11 +146,12 @@ class ExpenseGroupViewSet(viewsets.ModelViewSet):
                                                            expense_group_id=invitation['expense_group'])
                             group_invitation.save()
                             changes[field_name_pt] += f"\nConvidou o usuário {invitation['invited']['full_name']}"
-                            Notification.objects.create(
+                            notification = Notification.objects.create(
                                 title=f"Convite para o grupo {invitation['group_name']}",
                                 body=f"{invitation['sent_by']['full_name']} te convidou para entrar no grupo {invitation['group_name']}",
                                 user_id=invitation['invited']['id'],
                             )
+                            push_notifications.send_notification(notification)
             ActionLog.objects.create(user=request.user, expense_group_id=obj.id,
                                      type=ActionLog.ActionTypes.UPDATE,
                                      description=f"Atualizou o grupo {obj.name}",
@@ -335,6 +339,14 @@ class ExpenseViewSet(viewsets.ModelViewSet):
         for validator in expense_data['validators']:
             Validation.objects.create(validator_id=validator['id'], expense_id=expense.id)
         headers = self.get_success_headers(expense_serializer.data)
+        for member in expense.regarding.expense_group.members.exclude(id=request.user.id):
+            full_name = f"{member.first_name} {member.last_name}".strip()
+            notification = Notification.objects.create(
+                title="Despesa adicionada",
+                body=f"O membro {full_name} criou a despesa {expense.name} de valor R$ {expense.cost}",
+                user=member,
+            )
+            push_notifications.send_notification(notification)
         return Response(expense_serializer.data, status=status.HTTP_201_CREATED, headers=headers)
 
     @transaction.atomic
@@ -536,17 +548,19 @@ class JoinGroup(views.APIView):
             new_user_full_name = f"{user.first_name} {user.last_name}".strip()
             if group not in user.expenses_groups.all():
                 for membership in group.memberships.all():
-                    Notification.objects.create(
+                    notification = Notification.objects.create(
                         title=f"Novo membro no grupo {group.name}",
                         body=f"O usuário {new_user_full_name} entrou no grupo",
                         user=membership.user,
                     )
+                    push_notifications.send_notification(notification)
                 Membership.objects.create(group=group, user=user)
-                Notification.objects.create(
+                notification = Notification.objects.create(
                     title=f"Bem vindo ao grupo {group.name}",
                     body=f"Agora você já pode ver e criar despesas nesse grupo.",
                     user=user,
                 )
+                push_notifications.send_notification(notification)
 
             else:
                 return Response(status=status.HTTP_400_BAD_REQUEST, data={"detail": "Você já faz parte desse grupo"})
@@ -638,25 +652,28 @@ class GroupInvitationViewSet(viewsets.ModelViewSet):
             ActionLog.objects.create(user=request.user, expense_group=obj.expense_group,
                                      type=ActionLog.ActionTypes.UPDATE,
                                      description=f"{invited} aceitou o convite de {sent_by}", changes_json={})
-            Notification.objects.create(
+            notification = Notification.objects.create(
                 title="Convite aceito",
                 body=f"{invited} aceitou o seu convite para se juntar ao grupo {obj.expense_group.name}",
                 user=obj.sent_by,
             )
+            push_notifications.send_notification(notification)
             for membership in obj.expense_group.memberships.all():
-                Notification.objects.create(
+                notification = Notification.objects.create(
                     title=f"Novo membro no grupo {obj.expense_group.name}",
                     body=f"O usuário {invited} entrou no grupo",
                     user=membership.user,
                 )
+                push_notifications.send_notification(notification)
             Membership.objects.create(group=obj.expense_group, user=request.user)
 
         else:
-            Notification.objects.create(
+            notification = Notification.objects.create(
                 title="Convite rejeitado",
                 body=f"{invited} rejeitou o seu convite para se juntar ao grupo {obj.expense_group.name}",
                 user=obj.sent_by,
             )
+            push_notifications.send_notification(notification)
         return Response(data=GroupInvitationSerializer(obj).data, status=status.HTTP_200_OK)
 
 
@@ -743,11 +760,12 @@ class Register(views.APIView):
                 instance.expiry = datetime.now() + timedelta(days=+30)
                 instance.save()
                 Wallet.objects.create(owner=user)
-                Notification.objects.create(
+                notification = Notification.objects.create(
                     title="Bem vindo(a) ao App",
                     body=f"Confira o tour pelo aplicativo para conhecer nossas funcionalidades",
                     user=user,
                 )
+                push_notifications.send_notification(notification)
 
                 return Response(data={'user': serializer.data, 'api_token': token, 'fcm_token': user.fcm_token},
                                 status=status.HTTP_200_OK)
