@@ -13,7 +13,7 @@ from knox.models import AuthToken
 from datetime import datetime, timedelta
 from django.db import transaction
 import json
-from core.services import push_notifications
+from core.services import push_notifications, expense_groups
 FIELDS_NAMES_PT = {
     'name': 'nome',
     'description': 'descrição',
@@ -178,15 +178,22 @@ class RegardingViewSet(viewsets.ModelViewSet):
             return RegardingSerializerReader
 
     def create(self, request, *args, **kwargs):
+        current_user_full_name = f"{request.user.first_name} {request.user.last_name}".strip()
         response = super().create(request, *args, **kwargs)
         if response.status_code == 201:
             ActionLog.objects.create(user=request.user, expense_group_id=request.data['expense_group'],
                                      type=ActionLog.ActionTypes.CREATE,
                                      description=f"Criou a referência {request.data['name']}")
+            expense_group = ExpenseGroup.objects.get(id=request.data['expense_group'])
+            notification_data = {"title": "Referência adicionada",
+                                 "body": f"O membro {current_user_full_name} adicionou a referência {request.data['name']}"}
+            members = expense_groups.get_members(expense_group, request, exclude_current_user=True)
+            expense_groups.notify_members(members, notification_data)
         return response
 
     @transaction.atomic
     def update(self, request, *args, **kwargs):
+        current_user_full_name = f"{request.user.first_name} {request.user.last_name}".strip()
         obj = Regarding.objects.get(pk=kwargs['pk'])
         response = super().update(request, *args, **kwargs)
         if response.status_code == 200:
@@ -209,6 +216,10 @@ class RegardingViewSet(viewsets.ModelViewSet):
                                      type=ActionLog.ActionTypes.UPDATE,
                                      description=f"Atualizou a referência {obj.name}",
                                      changes_json=changes)
+            notification_data = {"title": "Referência atualizada",
+                                 "body": f"O membro {current_user_full_name} atualizou a referência {obj.name}"}
+            members = expense_groups.get_members(obj.expense_group, request, exclude_current_user=True)
+            expense_groups.notify_members(members, notification_data)
         if request.data.get("is_closed", False):
             regarding_serializer = RegardingSerializerReader(obj, context={"request": request})
             totals = regarding_serializer.data
@@ -273,6 +284,7 @@ class ExpenseViewSet(viewsets.ModelViewSet):
 
     @transaction.atomic
     def destroy(self, request, *args, **kwargs):
+        current_user_full_name = f"{request.user.first_name} {request.user.last_name}".strip()
         if "ids" in request.query_params:
             ids = request.query_params.get('ids').split(',')
             instances = Expense.objects.filter(id__in=ids).select_related("regarding__expense_group")
@@ -298,10 +310,15 @@ class ExpenseViewSet(viewsets.ModelViewSet):
             ActionLog.objects.create(user=request.user, expense_group_id=expense.regarding.expense_group.id,
                                      type=ActionLog.ActionTypes.DELETE,
                                      description=f"Deletou a despesa {expense.name}")
+            notification_data = {"title": "Despesa deletada",
+                                 "body": f"O membro {current_user_full_name} deletou a despesa {expense.name} de valor R$ {expense.cost}"}
+            members = expense_groups.get_members(expense.regarding.expense_group, request, exclude_current_user=True)
+            expense_groups.notify_members(members, notification_data)
         return response
 
     @transaction.atomic
     def create(self, request, *args, **kwargs):
+        current_user_full_name = f"{request.user.first_name} {request.user.last_name}".strip()
         print(request.data)
         expense_data = {**request.data, "created_by_id": request.user.id}
         expense_data["cost"] = expense_data["cost"].replace(".", "").replace(",", ".")
@@ -339,18 +356,15 @@ class ExpenseViewSet(viewsets.ModelViewSet):
         for validator in expense_data['validators']:
             Validation.objects.create(validator_id=validator['id'], expense_id=expense.id)
         headers = self.get_success_headers(expense_serializer.data)
-        for member in expense.regarding.expense_group.members.exclude(id=request.user.id):
-            full_name = f"{member.first_name} {member.last_name}".strip()
-            notification = Notification.objects.create(
-                title="Despesa adicionada",
-                body=f"O membro {full_name} criou a despesa {expense.name} de valor R$ {expense.cost}",
-                user=member,
-            )
-            push_notifications.send_notification(notification)
+        notification_data = {"title": "Despesa adicionada",
+                             "body": f"O membro {current_user_full_name} adicionou a despesa {expense.name} de valor R$ {expense.cost}"}
+        members = expense_groups.get_members(expense.regarding.expense_group, request, exclude_current_user=True)
+        expense_groups.notify_members(members, notification_data)
         return Response(expense_serializer.data, status=status.HTTP_201_CREATED, headers=headers)
 
     @transaction.atomic
     def partial_update(self, request, pk=None, *args, **kwargs):
+        current_user_full_name = f"{request.user.first_name} {request.user.last_name}".strip()
         print(request.data)
         expense = Expense.objects.get(id=pk)
         expense_data = {**request.data}
@@ -490,6 +504,11 @@ class ExpenseViewSet(viewsets.ModelViewSet):
         ActionLog.objects.create(user=request.user, expense_group_id=expense.regarding.expense_group.id,
                                  type=ActionLog.ActionTypes.UPDATE,
                                  description=f"Atualizou a despesa {expense_data['name']}", changes_json=changes)
+        notification_data = {"title": "Despesa editada",
+                             "body": f"O membro {current_user_full_name} editou a despesa {expense.name} de valor R$ {expense.cost}"}
+        members = expense_groups.get_members(expense.regarding.expense_group, request, exclude_current_user=True)
+        expense_groups.notify_members(members, notification_data)
+
         return Response(expense_serializer.data, status=status.HTTP_200_OK, headers=headers)
 
 

@@ -17,7 +17,7 @@ class Command(BaseCommand):
         self.send_notifications(notifications)
 
     def get_notifications(self):
-        notifications = Notification.objects.select_related("user").exclude(was_sent=True)
+        notifications = Notification.objects.select_related("user").exclude(was_sent=True).exclude(user__fcm_token__isnull=True)
         return notifications
 
     def send_notifications(self, notifications):
