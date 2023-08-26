@@ -108,35 +108,33 @@ def calculate_totals_by_member_and_member_versus_member(expense_items, membershi
     for item in expense_items:
         expense = item["expense"]
         payments = expense["payments"]
-
-        for payment in payments:
-            payer = payment["payer"]["id"]
-            if set(item["consumers"]) == set(members_ids):  # Shared between all members
-                for consumer in members_ids:
-                    totals_by_member[consumer]["shared"] += Decimal(item["price"])
-                totals_by_member[payer]["total_paid_shared"] += Decimal(item["price"])
-                for consumer in item["consumers"]:
-                    if consumer != payer:
-                        total_member_vs_member[payer][consumer] += (
+        payer = payments[0]["payer"]["id"]
+        if set(item["consumers"]) == set(members_ids):  # Shared between all members
+            for consumer in members_ids:
+                totals_by_member[consumer]["shared"] += Decimal(item["price"])
+            totals_by_member[payer]["total_paid_shared"] += Decimal(item["price"])
+            for consumer in item["consumers"]:
+                if consumer != payer:
+                    total_member_vs_member[payer][consumer] += (
                             Decimal(item["price"])
                             * totals_by_member[consumer]["weight"]
                             / group_total_weight
-                        )
-            elif len(item["consumers"]) == 1:  # Individual
-                consumer = item["consumers"][0]
-                totals_by_member[consumer]["individual"] += Decimal(item["price"])
-                if consumer != payer:
-                    total_member_vs_member[payer][consumer] += Decimal(item["price"])
-            else:  # Partial shared
-                n_consumers = len(item["consumers"])
-                for consumer in item["consumers"]:
-                    totals_by_member[consumer]["partial_shared"] += Decimal(
-                        item["price"]
                     )
-                    if consumer != payer:
-                        total_member_vs_member[payer][consumer] += (
+        elif len(item["consumers"]) == 1:  # Individual
+            consumer = item["consumers"][0]
+            totals_by_member[consumer]["individual"] += Decimal(item["price"])
+            if consumer != payer:
+                total_member_vs_member[payer][consumer] += Decimal(item["price"])
+        else:  # Partial shared
+            n_consumers = len(item["consumers"])
+            for consumer in item["consumers"]:
+                totals_by_member[consumer]["partial_shared"] += Decimal(
+                    item["price"]
+                )
+                if consumer != payer:
+                    total_member_vs_member[payer][consumer] += (
                             Decimal(item["price"]) / n_consumers
-                        )
+                    )
 
     return totals_by_member, total_member_vs_member
 
