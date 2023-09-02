@@ -158,6 +158,17 @@ class ExpenseGroupViewSet(viewsets.ModelViewSet):
                                      changes_json=changes)
         return response
 
+    @transaction.atomic
+    def destroy(self, request, *args, **kwargs):
+        current_user_full_name = f"{request.user.first_name} {request.user.last_name}".strip()
+        group = ExpenseGroup.objects.get(pk=kwargs['pk'])
+        members = expense_groups.get_members(group, request, exclude_current_user=True)
+        notification_data = {"title": "Grupo deletado",
+                             "body": f"O membro {current_user_full_name} excluiu o grupo {group.name} e você foi removido."}
+        expense_groups.notify_members(members, notification_data)
+        response = super().destroy(request, *args, **kwargs)
+        return response
+
 
 
 class RegardingViewSet(viewsets.ModelViewSet):
@@ -232,6 +243,20 @@ class RegardingViewSet(viewsets.ModelViewSet):
             obj.save(update_fields=["balance_json"])
         return response
 
+    @transaction.atomic
+    def destroy(self, request, *args, **kwargs):
+        current_user_full_name = f"{request.user.first_name} {request.user.last_name}".strip()
+        regarding = Regarding.objects.get(pk=kwargs['pk'])
+        response = super().destroy(request, *args, **kwargs)
+        if response.status_code == 204:
+            ActionLog.objects.create(user=request.user, expense_group_id=regarding.expense_group.id,
+                                     type=ActionLog.ActionTypes.DELETE,
+                                     description=f"Deletou a referência {regarding.name}")
+            notification_data = {"title": "Refrência deletada",
+                                 "body": f"O membro {current_user_full_name} deletou a referência {regarding.name}. Todas as despesas, items e pagamentos também foram excluídos."}
+            members = expense_groups.get_members(regarding.expense_group, request, exclude_current_user=True)
+            expense_groups.notify_members(members, notification_data)
+        return response
 
 class WalletViewSet(viewsets.ModelViewSet):
     queryset = Wallet.objects.all()
@@ -355,6 +380,12 @@ class ExpenseViewSet(viewsets.ModelViewSet):
         payment_serializer.save()
         for validator in expense_data['validators']:
             Validation.objects.create(validator_id=validator['id'], expense_id=expense.id)
+            notification = Notification.objects.create(
+                title=f"Validação solicitada",
+                body=f"{current_user_full_name} solicitou sua validação na despesa {expense.name}",
+                user_id=validator['id'],
+            )
+            push_notifications.send_notification(notification)
         headers = self.get_success_headers(expense_serializer.data)
         notification_data = {"title": "Despesa adicionada",
                              "body": f"O membro {current_user_full_name} adicionou a despesa {expense.name} de valor R$ {expense.cost}"}
@@ -439,6 +470,13 @@ class ExpenseViewSet(viewsets.ModelViewSet):
 
         if request.data.get("revalidate", False):
             expense.validations.update(is_active=True, validated_at=None, note="")
+            for validation in expense.validations.all():
+                notification = Notification.objects.create(
+                    title=f"Validação solicitada novamente",
+                    body=f"{current_user_full_name} editou a despesa {expense.name} e solicitou sua validação novamente",
+                    user=validation.validator,
+                )
+                push_notifications.send_notification(notification)
 
         print("here")
         headers = self.get_success_headers(expense_serializer.data)
@@ -623,10 +661,25 @@ class ValidationViewSet(viewsets.ModelViewSet):
 
     @transaction.atomic
     def partial_update(self, request, pk=None, *args, **kwargs):
+        current_user_full_name = f"{request.user.first_name} {request.user.last_name}".strip()
         print(request.data, pk)
         response = super().update(request, *args, **kwargs)
         obj = Validation.objects.get(pk=pk)
         expense_validations = Validation.objects.filter(expense=obj.expense)
+        expense_creator = obj.expense.created_by
+        if obj.validated_at:
+            notification = Notification.objects.create(
+                title=f"{current_user_full_name} validou uma despesa",
+                body=f"Está tudo certo com a despesa {obj.expense.name}",
+                user=expense_creator,
+            )
+        else:
+            notification = Notification.objects.create(
+                title=f"{current_user_full_name} rejeitou uma despesa",
+                body=f"A despesa {obj.expense.name} foi rejeitada." + f"O motivo da rejeição foi {obj.note}" if obj.note else "",
+                user=expense_creator,
+            )
+        push_notifications.send_notification(notification)
         validated = expense_validations.filter(validated_at__isnull=False)
         rejected = expense_validations.filter(validated_at__isnull=True, is_active=False)
         if expense_validations.count() == validated.count():
@@ -636,6 +689,14 @@ class ValidationViewSet(viewsets.ModelViewSet):
         else:
             obj.expense.validation_status = Expense.ValidationStatuses.AWAITING
         obj.expense.save(update_fields=['validation_status'])
+        if obj.expense.validation_status == Expense.ValidationStatuses.VALIDATED:
+            notification = Notification.objects.create(
+                title=f"Despesa validada",
+                body=f"Todos as validações solicitadas para a despesa {obj.expense.name} foram aprovadas",
+                user=expense_creator,
+            )
+            push_notifications.send_notification(notification)
+
         return response
 
 

@@ -26,13 +26,15 @@ def send_notification(notification):
                 response = response.json()
                 if response.get("failure", 1) == 0 and response.get("success", 0) == 1:
                     notification.was_sent = True
+                elif response['results'][0].get('error') == 'InvalidRegistration':
+                    print("here")
+                    notification.user.fcm_token = None
+                    notification.user.save()
                 else:
                     raise Exception(f"Firebase returned failure: {response.get('results', [])}")
             else:
                 raise Exception(f"Error in request: {response.status_code} - {response.text}")
     except Exception as exc:
         capture_exception(exc)
-        notification.user.fcm_token = None
-        notification.user.save()
         print(f"[NOTIFICATION] Error sending notification {notification.id} - {exc}")
 
