@@ -61,6 +61,7 @@ class MembershipSerializer(serializers.ModelSerializer):
         ret = super().to_representation(instance)
         level_index = Membership.Levels.values.index(ret['level'])
         ret['level'] = Membership.Levels.labels[level_index].capitalize()
+        ret['joined_at'] = instance.joined_at.strftime("%d/%m/%Y")
         return ret
 
 
@@ -303,6 +304,7 @@ class ValidationSerializerReader(serializers.ModelSerializer):
     def to_representation(self, instance):
         ret = super().to_representation(instance)
         ret['created_at'] = instance.created_at.strftime("%d/%m/%Y")
+        ret['validated_at'] = instance.validated_at.strftime("%d/%m/%Y") if instance.validated_at else None
         return ret
 
     def get_status(self, obj):

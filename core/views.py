@@ -178,7 +178,7 @@ class RegardingViewSet(viewsets.ModelViewSet):
 
     def get_queryset(self):
         self.queryset = self.queryset.select_related("expense_group").prefetch_related("expenses", "expenses__validations", "expenses__validations__validator")
-        return self.queryset.filter(expense_group__in=self.request.user.expenses_groups.all())
+        return self.queryset.filter(expense_group__in=self.request.user.expenses_groups.all()).order_by('-start_date', '-end_date')
 
 
     def get_serializer_class(self):
@@ -298,7 +298,7 @@ class ExpenseViewSet(viewsets.ModelViewSet):
 
     def get_queryset(self):
         self.queryset = self.queryset.filter(regarding__expense_group__in=self.request.user.expenses_groups.all())
-        return self.queryset.order_by("date")
+        return self.queryset.order_by("-date")
 
     def get_serializer_class(self):
         method = self.request.method
@@ -649,7 +649,7 @@ class ValidationViewSet(viewsets.ModelViewSet):
 
     def get_queryset(self):
         self.queryset = self.queryset.filter(validator=self.request.user)
-        return self.queryset
+        return self.queryset.order_by("-created_at")
 
 
     def get_serializer_class(self):
