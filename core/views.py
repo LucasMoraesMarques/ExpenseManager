@@ -14,6 +14,8 @@ from datetime import datetime, timedelta
 from django.db import transaction
 import json
 from core.services import push_notifications, expense_groups
+from babel.numbers import format_currency
+
 FIELDS_NAMES_PT = {
     'name': 'nome',
     'description': 'descrição',
@@ -336,7 +338,7 @@ class ExpenseViewSet(viewsets.ModelViewSet):
                                      type=ActionLog.ActionTypes.DELETE,
                                      description=f"Deletou a despesa {expense.name}")
             notification_data = {"title": "Despesa deletada",
-                                 "body": f"O membro {current_user_full_name} deletou a despesa {expense.name} de valor R$ {expense.cost}"}
+                                 "body": f"O membro {current_user_full_name} deletou a despesa {expense.name} de valor R$ {format_currency(expense.cost, 'BRL', '#,##0.00', locale='pt_BR')}"}
             members = expense_groups.get_members(expense.regarding.expense_group, request, exclude_current_user=True)
             expense_groups.notify_members(members, notification_data)
         return response
@@ -353,7 +355,7 @@ class ExpenseViewSet(viewsets.ModelViewSet):
         self.perform_create(expense_serializer)
         regarding = Regarding.objects.get(id=expense_data['regarding'])
         ActionLog.objects.create(user=request.user, expense_group_id=regarding.expense_group.id, type=ActionLog.ActionTypes.CREATE,
-                                 description=f"Criou a despesa {expense_data['name']} de valor R$ {expense_data['cost']}")
+                                 description=f"Criou a despesa {expense_data['name']} de valor R$ {format_currency(expense_data['cost'], 'BRL', '#,##0.00', locale='pt_BR')}")
 
         expense = Expense.objects.last()
         print(expense)
@@ -388,7 +390,7 @@ class ExpenseViewSet(viewsets.ModelViewSet):
             push_notifications.send_notification(notification)
         headers = self.get_success_headers(expense_serializer.data)
         notification_data = {"title": "Despesa adicionada",
-                             "body": f"O membro {current_user_full_name} adicionou a despesa {expense.name} de valor R$ {expense.cost}"}
+                             "body": f"O membro {current_user_full_name} adicionou a despesa {expense.name} de valor R$ {format_currency(expense.cost, 'BRL', '#,##0.00', locale='pt_BR')}"}
         members = expense_groups.get_members(expense.regarding.expense_group, request, exclude_current_user=True)
         expense_groups.notify_members(members, notification_data)
         return Response(expense_serializer.data, status=status.HTTP_201_CREATED, headers=headers)
@@ -487,10 +489,10 @@ class ExpenseViewSet(viewsets.ModelViewSet):
                 if (old := getattr(expense, field)) != (new := request.data.get(field)):
                     changes[field_name_pt] = f"Mudou a(o) {FIELDS_NAMES_PT[field]} de '{old}' para '{new}'"
             elif field == "cost":
-                old = getattr(expense, field)
-                new = float(request.data.get(field).replace('.', "").replace(",", "."))
+                old = format_currency(getattr(expense, field), 'BRL', '#,##0.00', locale='pt_BR')
+                new = format_currency(float(request.data.get(field).replace('.', "").replace(",", ".")), 'BRL', '#,##0.00', locale='pt_BR')
                 if old != new:
-                    changes[field_name_pt] = f"Mudou a(o) {FIELDS_NAMES_PT[field]} de R${old} para R${new}"
+                    changes[field_name_pt] = f"Mudou a(o) {FIELDS_NAMES_PT[field]} de R$ {old} para R$ {new}"
             elif field == 'date':
                 if (old := str(getattr(expense, field))) != (new := request.data.get(field)):
                     changes[
@@ -523,19 +525,19 @@ class ExpenseViewSet(viewsets.ModelViewSet):
                 if len(payments_to_delete_data):
                     changes[field_name_pt] = message
                     for payment in payments_to_delete_data:
-                        changes[field_name_pt] += f"{payment['payer__first_name']} R${payment['value']}, "
+                        changes[field_name_pt] += f"{payment['payer__first_name']} R$ {format_currency(payment['value'], 'BRL', '#,##0.00', locale='pt_BR')}, "
                     changes[field_name_pt] = changes[field_name_pt][:-2] + '.'
                 """message = '\nAtualizou os pagamentos '
                 if len(payments_to_update):
                     changes[field] += message
                     for payment in payments_to_update:
-                        changes[field] += f"{payment['payer_name']} - R${payment['value']}, "
+                        changes[field] += f"{payment['payer_name']} - R$ {format_currency(payment['value'], 'BRL', '#,##0.00', locale='pt_BR')}, "
                     changes[field] = changes[field][:-2] + '.'"""
                 message = '\nCriou os pagamentos '
                 if len(payments_to_create):
                     changes[field_name_pt] += message
                     for payment in payments_to_create:
-                        changes[field_name_pt] += f"{payment['payer_name']} R${payment['value']}, "
+                        changes[field_name_pt] += f"{payment['payer_name']} R$ {format_currency(payment['value'], 'BRL', '#,##0.00', locale='pt_BR')}, "
                     changes[field_name_pt] = changes[field_name_pt][:-2] + '.'
                 if not changes[field_name_pt]:
                     del changes[field_name_pt]
@@ -543,7 +545,7 @@ class ExpenseViewSet(viewsets.ModelViewSet):
                                  type=ActionLog.ActionTypes.UPDATE,
                                  description=f"Atualizou a despesa {expense_data['name']}", changes_json=changes)
         notification_data = {"title": "Despesa editada",
-                             "body": f"O membro {current_user_full_name} editou a despesa {expense.name} de valor R$ {expense.cost}"}
+                             "body": f"O membro {current_user_full_name} editou a despesa {expense.name} de valor R$ {format_currency(expense.cost, 'BRL', '#,##0.00', locale='pt_BR')}"}
         members = expense_groups.get_members(expense.regarding.expense_group, request, exclude_current_user=True)
         expense_groups.notify_members(members, notification_data)
 
@@ -667,36 +669,47 @@ class ValidationViewSet(viewsets.ModelViewSet):
         obj = Validation.objects.get(pk=pk)
         expense_validations = Validation.objects.filter(expense=obj.expense)
         expense_creator = obj.expense.created_by
-        if obj.validated_at:
+        if request.data.get("revalidate", False):
             notification = Notification.objects.create(
-                title=f"{current_user_full_name} validou uma despesa",
-                body=f"Está tudo certo com a despesa {obj.expense.name}",
-                user=expense_creator,
+                title=f"Validação solicitada novamente",
+                body=f"{current_user_full_name} solicitou sua validação novamente. Você rejeitou a despesa com a seguinte nota: {obj.note}",
+                user=obj.validator,
             )
-        else:
-            notification = Notification.objects.create(
-                title=f"{current_user_full_name} rejeitou uma despesa",
-                body=f"A despesa {obj.expense.name} foi rejeitada." + f"O motivo da rejeição foi {obj.note}" if obj.note else "",
-                user=expense_creator,
-            )
-        push_notifications.send_notification(notification)
-        validated = expense_validations.filter(validated_at__isnull=False)
-        rejected = expense_validations.filter(validated_at__isnull=True, is_active=False)
-        if expense_validations.count() == validated.count():
-            obj.expense.validation_status = Expense.ValidationStatuses.VALIDATED
-        elif expense_validations.count() == rejected.count():
-            obj.expense.validation_status = Expense.ValidationStatuses.REJECTED
-        else:
-            obj.expense.validation_status = Expense.ValidationStatuses.AWAITING
-        obj.expense.save(update_fields=['validation_status'])
-        if obj.expense.validation_status == Expense.ValidationStatuses.VALIDATED:
-            notification = Notification.objects.create(
-                title=f"Despesa validada",
-                body=f"Todos as validações solicitadas para a despesa {obj.expense.name} foram aprovadas",
-                user=expense_creator,
-            )
+            obj.is_active=True
+            obj.validated_at=None
+            obj.note=""
+            obj.save()
             push_notifications.send_notification(notification)
-
+        else:
+            if obj.validated_at:
+                notification = Notification.objects.create(
+                    title=f"{current_user_full_name} validou uma despesa",
+                    body=f"Está tudo certo com a despesa {obj.expense.name}",
+                    user=expense_creator,
+                )
+            else:
+                notification = Notification.objects.create(
+                    title=f"{current_user_full_name} rejeitou uma despesa",
+                    body=f"A despesa {obj.expense.name} foi rejeitada." + f"O motivo da rejeição foi {obj.note}" if obj.note else "",
+                    user=expense_creator,
+                )
+            push_notifications.send_notification(notification)
+            validated = expense_validations.filter(validated_at__isnull=False)
+            rejected = expense_validations.filter(validated_at__isnull=True, is_active=False)
+            if expense_validations.count() == validated.count():
+                obj.expense.validation_status = Expense.ValidationStatuses.VALIDATED
+            elif expense_validations.count() == rejected.count():
+                obj.expense.validation_status = Expense.ValidationStatuses.REJECTED
+            else:
+                obj.expense.validation_status = Expense.ValidationStatuses.AWAITING
+            obj.expense.save(update_fields=['validation_status'])
+            if obj.expense.validation_status == Expense.ValidationStatuses.VALIDATED:
+                notification = Notification.objects.create(
+                    title=f"Despesa validada",
+                    body=f"Todos as validações solicitadas para a despesa {obj.expense.name} foram aprovadas",
+                    user=expense_creator,
+                )
+                push_notifications.send_notification(notification)
         return response
 
 
