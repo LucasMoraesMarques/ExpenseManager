@@ -20,6 +20,10 @@ class User(AbstractUser):
     fcm_token = models.CharField("Firebase Token", max_length=255, blank=True, null=True)
     google_id = models.CharField("Google Account Id", max_length=128, null=True, blank=True)
 
+    @property
+    def full_name(self):
+        return f"{self.first_name} {self.last_name}".strip().capitalize()
+
 
 class BaseModel(models.Model):
     created_at = models.DateTimeField(auto_now_add=True)

@@ -12,8 +12,7 @@ from django.db.models import F, Q
 from knox.models import AuthToken
 from datetime import datetime, timedelta
 from django.db import transaction
-import json
-from core.services import push_notifications, expense_groups
+from core.services import push_notifications, expense_groups, action_logs, regardings
 from babel.numbers import format_currency
 
 FIELDS_NAMES_PT = {
@@ -35,7 +34,9 @@ class ExpenseGroupViewSet(viewsets.ModelViewSet):
 
     def get_queryset(self):
         self.queryset = self.request.user.expenses_groups.all()
-        self.queryset = self.queryset.prefetch_related("regardings", "regardings__expenses", "members", "memberships", "memberships__user", "invitations", "invitations__sent_by", "invitations__invited")
+        self.queryset = self.queryset.prefetch_related("regardings", "regardings__expenses", "members", "memberships",
+                                                       "memberships__user", "invitations", "invitations__sent_by",
+                                                       "invitations__invited")
         return self.queryset
 
     def get_serializer_class(self):
@@ -48,129 +49,37 @@ class ExpenseGroupViewSet(viewsets.ModelViewSet):
     @transaction.atomic
     def create(self, request, *args, **kwargs):
         response = super().create(request, *args, **kwargs)
-        if response.status_code == 201:
-            group = ExpenseGroup.objects.filter(name=request.data['name']).last()
-            Membership.objects.create(group=group, user=request.user, level=Membership.Levels.ADMIN)
-
-            notification = Notification.objects.create(
-                title=f"Novo grupo criado",
-                body=f"O grupo {group.name} foi criado com sucesso!",
-                user=request.user,
-            )
-            push_notifications.send_notification(notification)
-            changes = {}
-            invitations = request.data.get("invitations", [])
-            field_name_pt = FIELDS_NAMES_PT["invitations"]
-            changes[field_name_pt] = ''
-            for invitation in invitations:
-                group_invitation = GroupInvitation.objects.create(sent_by_id=invitation['sent_by']['id'],
-                                                                  invited_id=invitation['invited']['id'],
-                                                                  expense_group_id=group.id)
-                group_invitation.save()
-                changes[field_name_pt] += f"\nConvidou o usuário {invitation['invited']['full_name']}"
-                notification = Notification.objects.create(
-                    title=f"Convite para o grupo {group.name}",
-                    body=f"{invitation['sent_by']['full_name']} te convidou para entrar no grupo {group.name}",
-                    user_id=invitation['invited']['id'],
-                )
-                push_notifications.send_notification(notification)
-            ActionLog.objects.create(user=request.user, expense_group_id=group.id,
-                                     type=ActionLog.ActionTypes.CREATE,
-                                     description=f"Criou o grupo {group.name}", changes_json=changes)
+        if response.status_code == status.HTTP_201_CREATED:
+            group = ExpenseGroup.objects.filter(name=request.data.get("name", "")).last()
+            new_membership = Membership.objects.create(group=group, user=request.user, level=Membership.Levels.ADMIN)
+            expense_groups.notify_group_was_created(new_membership)
+            invitations = expense_groups.create_invitations(request, group)
+            expense_groups.notify_users_invited(invitations)
+            action_logs.new_group(request, group)
         return response
 
     @transaction.atomic
     def update(self, request, *args, **kwargs):
-        obj = ExpenseGroup.objects.get(pk=kwargs['pk'])
+        group = ExpenseGroup.objects.get(pk=kwargs['pk'])
         response = super().update(request, *args, **kwargs)
-        print(request.data)
-        if response.status_code == 200:
-            changes = {}
-            for field in request.data.keys():
-                field_name_pt = FIELDS_NAMES_PT.get(field, field)
-                if field in ['name', 'description']:
-                    if (old := getattr(obj, field)) != (new := request.data.get(field)):
-                        changes[field_name_pt] = f"Mudou o(a) {FIELDS_NAMES_PT[field]} de '{old}' para '{new}'"
-                elif field == 'members':
-                    old_members = set(obj.members.values_list("id", flat=True))
-                    new_members = set(request.data.get(field))
-                    if old_members != new_members:
-                        changes[field_name_pt] = ''
-                        removed_members = old_members.difference(new_members)
-                        new_members = new_members.difference(old_members)
-                        removed_members = User.objects.filter(id__in=removed_members)
-                        new_members = User.objects.filter(id__in=new_members)
-                        removed_members_data = UserSerializer(removed_members, many=True).data
-                        new_members_data = UserSerializer(new_members, many=True).data
-                        obj.refresh_from_db()
-                        user_editor_full_name = f"{request.user.first_name + ' ' + request.user.last_name}".strip()
-                        for member in removed_members:
-                            notification = Notification.objects.create(
-                                title=f"Você foi removido(a) do grupo {obj.name}",
-                                body=f"O membro {user_editor_full_name} removeu você do grupo. Se acha que isso foi um engano, contate-o.",
-                                user=member,
-                            )
-                            push_notifications.send_notification(notification)
-                            obj.memberships.filter(user=member).delete()
-                        for member in new_members:
-                            Membership.objects.create(group=obj, user=member)
-                        if removed_members:
-                            changes[field_name_pt] = "\nRemoveu o(s) membro(s) "
-                            for member in removed_members_data:
-                                changes[field_name_pt] += member['full_name'] + ', '
-                            changes[field_name_pt] = changes[field_name_pt][:-2] + '.'
-                        if new_members:
-                            changes[field_name_pt] = "\nAdicionou o(s) membro(s) "
-                            for member in new_members_data:
-                                changes[field_name_pt] += member['full_name'] + ', '
-                            changes[field_name_pt] = changes[field_name_pt][:-2] + '.'
-                elif field == "memberships":
-                    memberships = request.data.get("memberships", [])
-                    changes["membros"] = ''
-                    for membership_data in memberships:
-                        if membership_data.get('updated', False):
-                            membership = obj.memberships.get(id=membership_data.get('id'))
-                            user_full_name = f"{membership.user.first_name} {membership.user.last_name}".strip()
-                            new_level_index = Membership.Levels.labels.index(membership_data['level'].upper())
-                            old_level_index = Membership.Levels.values.index(membership.level)
-                            new_level = Membership.Levels.values[new_level_index]
-                            old_level = Membership.Levels.labels[old_level_index]
-                            changes["membros"] += f"\nMudou o membro {user_full_name} de {old_level} para {membership_data['level'].upper()}"
-                            membership.level = new_level
-                            membership.save(update_fields=['level'])
-                elif field == "invitations":
-                    invitations = request.data.get("invitations", [])
-                    changes[field_name_pt] = ''
-                    for invitation in invitations:
-                        if invitation.get('create', False):
-                            group_invitation = GroupInvitation.objects.create(sent_by_id=invitation['sent_by']['id'],
-                                                           invited_id=invitation['invited']['id'],
-                                                           expense_group_id=invitation['expense_group'])
-                            group_invitation.save()
-                            changes[field_name_pt] += f"\nConvidou o usuário {invitation['invited']['full_name']}"
-                            notification = Notification.objects.create(
-                                title=f"Convite para o grupo {invitation['group_name']}",
-                                body=f"{invitation['sent_by']['full_name']} te convidou para entrar no grupo {invitation['group_name']}",
-                                user_id=invitation['invited']['id'],
-                            )
-                            push_notifications.send_notification(notification)
-            ActionLog.objects.create(user=request.user, expense_group_id=obj.id,
-                                     type=ActionLog.ActionTypes.UPDATE,
-                                     description=f"Atualizou o grupo {obj.name}",
-                                     changes_json=changes)
+        if response.status_code == status.HTTP_200_OK:
+            removed_members = expense_groups.remove_members(request, group)
+            invitations = expense_groups.create_invitations(request, group)
+            expense_groups.notify_users_removed(removed_members, group, request.user)
+            expense_groups.notify_users_invited(invitations)
+            action_logs.update_group(request, group, removed_members, invitations)
+            expense_groups.update_memberships(request, group)
         return response
 
     @transaction.atomic
     def destroy(self, request, *args, **kwargs):
-        current_user_full_name = f"{request.user.first_name} {request.user.last_name}".strip()
         group = ExpenseGroup.objects.get(pk=kwargs['pk'])
         members = expense_groups.get_members(group, request, exclude_current_user=True)
         notification_data = {"title": "Grupo deletado",
-                             "body": f"O membro {current_user_full_name} excluiu o grupo {group.name} e você foi removido."}
+                             "body": f"O membro {request.user.full_name} excluiu o grupo {group.name} e você foi removido."}
         expense_groups.notify_members(members, notification_data)
         response = super().destroy(request, *args, **kwargs)
         return response
-
 
 
 class RegardingViewSet(viewsets.ModelViewSet):
@@ -182,7 +91,6 @@ class RegardingViewSet(viewsets.ModelViewSet):
         self.queryset = self.queryset.select_related("expense_group").prefetch_related("expenses", "expenses__validations", "expenses__validations__validator")
         return self.queryset.filter(expense_group__in=self.request.user.expenses_groups.all()).order_by('-start_date', '-end_date')
 
-
     def get_serializer_class(self):
         method = self.request.method
         if method == 'PATCH' or method == 'POST':
@@ -191,74 +99,32 @@ class RegardingViewSet(viewsets.ModelViewSet):
             return RegardingSerializerReader
 
     def create(self, request, *args, **kwargs):
-        current_user_full_name = f"{request.user.first_name} {request.user.last_name}".strip()
         response = super().create(request, *args, **kwargs)
-        if response.status_code == 201:
-            ActionLog.objects.create(user=request.user, expense_group_id=request.data['expense_group'],
-                                     type=ActionLog.ActionTypes.CREATE,
-                                     description=f"Criou a referência {request.data['name']}")
-            expense_group = ExpenseGroup.objects.get(id=request.data['expense_group'])
-            notification_data = {"title": "Referência adicionada",
-                                 "body": f"O membro {current_user_full_name} adicionou a referência {request.data['name']}"}
-            members = expense_groups.get_members(expense_group, request, exclude_current_user=True)
-            expense_groups.notify_members(members, notification_data)
+        if response.status_code == status.HTTP_201_CREATED:
+            group = ExpenseGroup.objects.get(id=request.data['expense_group'])
+            regardings.notify_members_about_new_regarding(request, group)
+            action_logs.new_regarding(request)
         return response
 
     @transaction.atomic
     def update(self, request, *args, **kwargs):
-        current_user_full_name = f"{request.user.first_name} {request.user.last_name}".strip()
-        obj = Regarding.objects.get(pk=kwargs['pk'])
+        regarding = Regarding.objects.get(pk=kwargs['pk'])
         response = super().update(request, *args, **kwargs)
-        if response.status_code == 200:
-            changes = {}
-            for field in request.data.keys():
-                field_name_pt = FIELDS_NAMES_PT.get(field, field)
-                if field in ['name', 'description']:
-                    if (old := getattr(obj, field)) != (new := request.data.get(field)):
-                        changes[field_name_pt] = f"Mudou a(o) {FIELDS_NAMES_PT[field]} de '{old}' para '{new}'"
-                elif field in ['start_date', 'end_date']:
-                    if (old := str(getattr(obj, field))) != (new := request.data.get(field)):
-                        changes[field_name_pt] = f"Mudou a(o) {FIELDS_NAMES_PT[field]} de '{old[8:10]}/{old[5:7]}/{old[:4]}' para '{new[8:10]}/{new[5:7]}/{new[:4]}'"
-                elif field == 'is_closed':
-                    if (old := getattr(obj, field)) != (new := request.data.get(field)):
-                        old = 'finalizada' if old else 'em andamento'
-                        new = 'finalizada' if new else 'em andamento'
-                        changes[field_name_pt] = f"Mudou a(o) {FIELDS_NAMES_PT[field]} de '{old}' para '{new}'"
-
-            ActionLog.objects.create(user=request.user, expense_group_id=obj.expense_group.id,
-                                     type=ActionLog.ActionTypes.UPDATE,
-                                     description=f"Atualizou a referência {obj.name}",
-                                     changes_json=changes)
-            notification_data = {"title": "Referência atualizada",
-                                 "body": f"O membro {current_user_full_name} atualizou a referência {obj.name}"}
-            members = expense_groups.get_members(obj.expense_group, request, exclude_current_user=True)
-            expense_groups.notify_members(members, notification_data)
-        if request.data.get("is_closed", False):
-            regarding_serializer = RegardingSerializerReader(obj, context={"request": request})
-            totals = regarding_serializer.data
-            obj.balance_json = json.dumps({
-                "general_total": totals.get('general_total', {}),
-                "consumer_total": totals.get('consumer_total', []),
-                "total_by_day": totals.get('total_by_day', {}),
-                "total_member_vs_member": totals.get('total_member_vs_member', {}),
-            }, default=str)
-            obj.save(update_fields=["balance_json"])
+        if response.status_code == status.HTTP_200_OK:
+            action_logs.update_regarding(request, regarding)
+            regardings.notify_members_about_regarding_update(request, regarding)
+            regardings.update_balance_json(request, regarding)
         return response
 
     @transaction.atomic
     def destroy(self, request, *args, **kwargs):
-        current_user_full_name = f"{request.user.first_name} {request.user.last_name}".strip()
         regarding = Regarding.objects.get(pk=kwargs['pk'])
         response = super().destroy(request, *args, **kwargs)
-        if response.status_code == 204:
-            ActionLog.objects.create(user=request.user, expense_group_id=regarding.expense_group.id,
-                                     type=ActionLog.ActionTypes.DELETE,
-                                     description=f"Deletou a referência {regarding.name}")
-            notification_data = {"title": "Refrência deletada",
-                                 "body": f"O membro {current_user_full_name} deletou a referência {regarding.name}. Todas as despesas, items e pagamentos também foram excluídos."}
-            members = expense_groups.get_members(regarding.expense_group, request, exclude_current_user=True)
-            expense_groups.notify_members(members, notification_data)
+        if response.status_code == status.HTTP_204_NO_CONTENT:
+            regardings.notify_members_about_regarding_deletion(request, regarding)
+            action_logs.regarding_deletion(request, regarding)
         return response
+
 
 class WalletViewSet(viewsets.ModelViewSet):
     queryset = Wallet.objects.all()
