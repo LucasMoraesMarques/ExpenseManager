@@ -220,15 +220,16 @@ class RegardingSerializerReader(serializers.ModelSerializer):
         ret = super().to_representation(instance)
         ret['start_date'] = instance.start_date.strftime("%d/%m/%Y")
         ret['end_date'] = instance.end_date.strftime("%d/%m/%Y")
-        for key, value in ret['personal_total'].items():
-            if key not in ["payments__payer", "full_name"]:
-                ret['personal_total'][key] = format_decimal(value, locale="pt_BR", format="#.###,00")
-        for key, value in ret['general_total'].items():
-            if key != "regarding":
-                ret['general_total'][key] = format_decimal(value, locale="pt_BR", format="#.###,00")
-        for member, debtors in ret['total_member_vs_member'].items():
-            for debtor, value in ret['total_member_vs_member'][member].items():
-                ret['total_member_vs_member'][member][debtor] = format_decimal(value, locale="pt_BR", format="#.###,00")
+        if not instance.is_closed:
+            for key, value in ret['personal_total'].items():
+                if key not in ["payments__payer", "full_name"]:
+                    ret['personal_total'][key] = format_decimal(value, locale="pt_BR", format="#.###,00")
+            for key, value in ret['general_total'].items():
+                if key != "regarding":
+                    ret['general_total'][key] = format_decimal(value, locale="pt_BR", format="#.###,00")
+            for member, debtors in ret['total_member_vs_member'].items():
+                for debtor, value in ret['total_member_vs_member'][member].items():
+                    ret['total_member_vs_member'][member][debtor] = format_decimal(value, locale="pt_BR", format="#.###,00")
         return ret
 
 

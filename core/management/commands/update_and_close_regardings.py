@@ -27,6 +27,8 @@ class Command(BaseCommand):
 
     def update_regadings_balance_json(self, regardings):
         for regarding in regardings:
+            regarding.balance_json = {}
+            regarding.is_closed = False
             regarding_serializer = RegardingSerializerReader(regarding, context={"request": {"user": User.objects.first()}})
             totals = regarding_serializer.data
             regarding.balance_json = json.dumps({

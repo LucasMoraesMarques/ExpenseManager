@@ -73,7 +73,11 @@ def calculate_general_totals(expenses):
     return general_totals
 
 
-def calculate_balance_by_member(totals_by_member, group_total_weight):
+def calculate_balance_by_member(totals_by_member, total_member_vs_member, expenses, group_total_weight):
+    for creditor in total_member_vs_member.keys():
+        for debtor in total_member_vs_member[creditor].keys():
+            totals_by_member[creditor]["total_to_receive"] += total_member_vs_member[creditor][debtor]
+            totals_by_member[debtor]["total_to_pay"] += total_member_vs_member[creditor][debtor]
     for member, totals in totals_by_member.items():
         total_paid_shared = totals_by_member[member]["total_paid_shared"]
         expected_total_paid = totals["shared"] * totals["weight"] / group_total_weight
@@ -81,6 +85,10 @@ def calculate_balance_by_member(totals_by_member, group_total_weight):
         totals_by_member[member]["balance"] = round(
             total_paid_shared - expected_total_paid, 2
         )
+        totals_by_member[member]["total_paid"] = expenses.filter(payments__payer_id=member).aggregate(total_paid=Sum("payments__value"))["total_paid"] or Decimal(0)
+        totals_by_member[member]["final_balance"] = round(totals_by_member[member]["total_to_receive"] - totals_by_member[member]["total_to_pay"], 2)
+        totals_by_member[member]["total_to_receive"] = round(totals_by_member[member]["total_to_receive"], 2)
+        totals_by_member[member]["total_to_pay"] = round(totals_by_member[member]["total_to_pay"], 2)
     return totals_by_member
 
 
@@ -93,6 +101,10 @@ def calculate_totals_by_member_and_member_versus_member(expense_items, membershi
             "total_paid_shared": Decimal(0),
             "weight": membership.average_weight,
             "full_name": membership.full_name,
+            "total_to_receive": Decimal(0),
+            "total_to_pay": Decimal(0),
+            "final_balance": Decimal(0),
+            "total_paid": Decimal(0)
         }
         for membership in memberships
     }
@@ -183,7 +195,7 @@ def calculate_totals_of_regarding(regarding, items):
         totals_by_member,
         total_member_vs_member,
     ) = calculate_totals_by_member_and_member_versus_member(items, memberships, group_total_weight)
-    totals_by_member = calculate_balance_by_member(totals_by_member, group_total_weight)
+    totals_by_member = calculate_balance_by_member(totals_by_member, total_member_vs_member, expenses, group_total_weight)
     total_member_vs_member = adjust_total_member_vs_member(
         total_member_vs_member, totals_by_member
     )
