@@ -12,8 +12,7 @@ from django.db.models import F, Q
 from knox.models import AuthToken
 from datetime import datetime, timedelta
 from django.db import transaction
-from core.services import push_notifications, expense_groups, action_logs, regardings
-from babel.numbers import format_currency
+from core.services import push_notifications, expense_groups, action_logs, regardings, validations, expenses
 
 FIELDS_NAMES_PT = {
     'name': 'nome',
@@ -136,7 +135,6 @@ class WalletViewSet(viewsets.ModelViewSet):
         return self.queryset
 
 
-
 class PaymentMethodViewSet(viewsets.ModelViewSet):
     queryset = PaymentMethod.objects.all()
     serializer_class = PaymentMethodSerializer
@@ -147,7 +145,6 @@ class PaymentMethodViewSet(viewsets.ModelViewSet):
         return self.queryset
 
 
-
 class PaymentViewSet(viewsets.ModelViewSet):
     queryset = Payment.objects.all().select_related("expense", "expense__regarding__expense_group", "payment_method", "payer").prefetch_related("expense__validations", "expense__validations__validator", "expense__validated_by")
     serializer_class = PaymentSerializerReader
@@ -156,7 +153,6 @@ class PaymentViewSet(viewsets.ModelViewSet):
     def get_queryset(self):
         self.queryset = self.queryset.filter(expense__regarding__expense_group__in=self.request.user.expenses_groups.all())
         return self.queryset
-
 
 
 class ExpenseViewSet(viewsets.ModelViewSet):
@@ -177,246 +173,42 @@ class ExpenseViewSet(viewsets.ModelViewSet):
 
     @transaction.atomic
     def destroy(self, request, *args, **kwargs):
-        current_user_full_name = f"{request.user.first_name} {request.user.last_name}".strip()
         if "ids" in request.query_params:
-            ids = request.query_params.get('ids').split(',')
-            instances = Expense.objects.filter(id__in=ids).select_related("regarding__expense_group")
-
-            delete_by_groups = {}
-            for instance in instances:
-                if instance.regarding.expense_group not in delete_by_groups.keys():
-                    delete_by_groups[instance.regarding.expense_group] = [instance.name]
-                else:
-                    delete_by_groups[instance.regarding.expense_group].append(instance.name)
-            print(delete_by_groups)
-            for group, deleted_expenses in delete_by_groups.items():
-                log_description = 'Deletou em massas as depesas '
-                for expense_name in deleted_expenses:
-                    log_description += expense_name + ', '
-                ActionLog.objects.create(user=request.user, expense_group_id=group.id, type=ActionLog.ActionTypes.DELETE, description=log_description)
-            instances.delete()
-            print(request.query_params.get('ids'))
+            delete_by_groups = expenses.batch_delete_expense(request.query_params.get('ids').split(','))
+            action_logs.batch_delete_expense(request, delete_by_groups)
             return Response(status=status.HTTP_204_NO_CONTENT)
-        expense = Expense.objects.get(pk=kwargs['pk'])
-        response = super().destroy(request, *args, **kwargs)
-        if response.status_code == 204:
-            ActionLog.objects.create(user=request.user, expense_group_id=expense.regarding.expense_group.id,
-                                     type=ActionLog.ActionTypes.DELETE,
-                                     description=f"Deletou a despesa {expense.name}")
-            notification_data = {"title": "Despesa deletada",
-                                 "body": f"O membro {current_user_full_name} deletou a despesa {expense.name} de valor R$ {format_currency(expense.cost, 'BRL', '#,##0.00', locale='pt_BR')}"}
-            members = expense_groups.get_members(expense.regarding.expense_group, request, exclude_current_user=True)
-            expense_groups.notify_members(members, notification_data)
-        return response
+        else:
+            expense = Expense.objects.get(pk=kwargs['pk'])
+            response = super().destroy(request, *args, **kwargs)
+            if response.status_code == status.HTTP_204_NO_CONTENT:
+                expenses.notify_members_about_expense_deletion(request, expense)
+                action_logs.delete_expense(request, expense)
+            return response
 
     @transaction.atomic
     def create(self, request, *args, **kwargs):
-        current_user_full_name = f"{request.user.first_name} {request.user.last_name}".strip()
-        print(request.data)
-        expense_data = {**request.data, "created_by_id": request.user.id}
-        expense_data["cost"] = expense_data["cost"].replace(".", "").replace(",", ".")
-        expense_data['created_by'] = request.user.id
-        expense_serializer = self.get_serializer(data=expense_data)
-        expense_serializer.is_valid(raise_exception=True)
-        self.perform_create(expense_serializer)
-        regarding = Regarding.objects.get(id=expense_data['regarding'])
-        ActionLog.objects.create(user=request.user, expense_group_id=regarding.expense_group.id, type=ActionLog.ActionTypes.CREATE,
-                                 description=f"Criou a despesa {expense_data['name']} de valor R$ {format_currency(expense_data['cost'], 'BRL', '#,##0.00', locale='pt_BR')}")
-
-        expense = Expense.objects.last()
-        print(expense)
-        items = []
-        for item in request.data.get("items"):
-            consumers = []
-            for consumer in item['consumers']:
-                consumers.append(consumer['id'])
-            item['consumers'] = consumers
-            item['expense'] = expense.id
-            item["price"] = item["price"].replace(".", "").replace(",", ".")
-            items.append(item)
-        item_serializer = ItemSerializerWriter(data=items, many=True)
-        item_serializer.is_valid(raise_exception=True)
-        payments = []
-        for payment in request.data.get("payments"):
-            payment = {**payment, "expense": expense.id, "payer": payment["payer"]["id"], "payment_method": payment["payment_method"]["id"]}
-            payment["value"] = payment["value"].replace(".", "").replace(",", ".")
-            payments.append(payment)
-        print("here")
-        payment_serializer = PaymentSerializerWriter(data=payments, many=True)
-        payment_serializer.is_valid(raise_exception=True)
-        item_serializer.save()
-        payment_serializer.save()
-        for validator in expense_data['validators']:
-            Validation.objects.create(validator_id=validator['id'], expense_id=expense.id)
-            notification = Notification.objects.create(
-                title=f"Validação solicitada",
-                body=f"{current_user_full_name} solicitou sua validação na despesa {expense.name}",
-                user_id=validator['id'],
-            )
-            push_notifications.send_notification(notification)
-        headers = self.get_success_headers(expense_serializer.data)
-        notification_data = {"title": "Despesa adicionada",
-                             "body": f"O membro {current_user_full_name} adicionou a despesa {expense.name} de valor R$ {format_currency(expense.cost, 'BRL', '#,##0.00', locale='pt_BR')}"}
-        members = expense_groups.get_members(expense.regarding.expense_group, request, exclude_current_user=True)
-        expense_groups.notify_members(members, notification_data)
-        return Response(expense_serializer.data, status=status.HTTP_201_CREATED, headers=headers)
+        response = super().create(request, *args, **kwargs)
+        if response.status_code == status.HTTP_201_CREATED:
+            expense = request.user.created_expenses.last()
+            expenses.create_items_for_new_expense(request.data.get("items"), expense)
+            expenses.create_payments_for_new_expense(request.data.get("payments"), expense)
+            expenses.notify_expense_validators(request, expense)
+            expenses.notify_members_about_new_expense(request,expense)
+            action_logs.new_expense(request, expense)
+        return response
 
     @transaction.atomic
     def partial_update(self, request, pk=None, *args, **kwargs):
-        current_user_full_name = f"{request.user.first_name} {request.user.last_name}".strip()
-        print(request.data)
         expense = Expense.objects.get(id=pk)
-        expense_data = {**request.data}
-        expense_data["cost"] = expense_data["cost"].replace(".", "").replace(",", ".")
-        expense_serializer = self.get_serializer(expense, data=expense_data, partial=True)
-        expense_serializer.is_valid(raise_exception=True)
-
-
-        print(expense)
-        items_to_create = []
-        items_to_update = []
-        for item in request.data.get("items"):
-            consumers = []
-            for consumer in item['consumers']:
-                consumers.append(consumer['id'])
-            item['consumers'] = consumers
-            item['expense'] = expense.id
-            item["price"] = item["price"].replace(".", "").replace(",", ".")
-            if "created_at" in item.keys():
-                items_to_update.append(item)
-            else:
-                items_to_create.append(item)
-        item_serializer_create = ItemSerializerWriter(data=items_to_create, many=True)
-        item_serializer_create.is_valid(raise_exception=True)
-        items_to_delete = Item.objects.filter(expense=expense.id).exclude(id__in=[item['id'] for item in items_to_update])
-        items_to_delete_names = list(items_to_delete.values_list("name", flat=True))
-
-
-        items_serializers_to_save = []
-        for item in items_to_update:
-            print(item)
-            obj = Item.objects.get(pk=item['id'])
-            item_serializer_update = ItemSerializerWriter(obj, data=item, partial=True)
-            item_serializer_update.is_valid(raise_exception=True)
-            items_serializers_to_save.append(item_serializer_update)
-
-
-
-        payments_to_create = []
-        payments_to_update = []
-        for payment in request.data.get("payments"):
-            payer = payment["payer"]
-            payment = {**payment, "expense": expense.id, "payer": payer['id'], "payment_method": payment["payment_method"]["id"], 'payer_name': payer.get('name', None) or payer.get('full_name', None)}
-            payment["value"] = payment["value"].replace(".", "").replace(",", ".")
-            if "created_at" in payment.keys():
-                payments_to_update.append(payment)
-            else:
-                payments_to_create.append(payment)
-
-        payment_serializer_create = PaymentSerializerWriter(data=payments_to_create, many=True)
-        payment_serializer_create.is_valid(raise_exception=True)
-
-        payments_serializers_to_save = []
-        for payment in payments_to_update:
-            obj = Payment.objects.get(pk=payment['id'])
-            payment_serializer_update = PaymentSerializerWriter(obj, data=payment, partial=True)
-            payment_serializer_update.is_valid(raise_exception=True)
-            payments_serializers_to_save.append(payment_serializer_update)
-
-        payments_to_delete = Payment.objects.filter(expense=expense.id).exclude(id__in=[payment['id'] for payment in payments_to_update])
-        payments_to_delete_data = payments_to_delete.values("payer__first_name", "value")
-
-        expense_serializer.save()
-        items_to_delete.delete()
-        item_serializer_create.save()
-        payments_to_delete.delete()
-        payment_serializer_create.save()
-        for item_serializer in items_serializers_to_save:
-            item_serializer.save()
-        for payment_serializer in payments_serializers_to_save:
-            payment_serializer.save()
-
-        if request.data.get("revalidate", False):
-            expense.validations.update(is_active=True, validated_at=None, note="")
-            for validation in expense.validations.all():
-                notification = Notification.objects.create(
-                    title=f"Validação solicitada novamente",
-                    body=f"{current_user_full_name} editou a despesa {expense.name} e solicitou sua validação novamente",
-                    user=validation.validator,
-                )
-                push_notifications.send_notification(notification)
-
-        print("here")
-        headers = self.get_success_headers(expense_serializer.data)
-        changes = {}
-        for field in request.data.keys():
-            field_name_pt = FIELDS_NAMES_PT.get(field, field)
-            if field in ['name', 'description']:
-                if (old := getattr(expense, field)) != (new := request.data.get(field)):
-                    changes[field_name_pt] = f"Mudou a(o) {FIELDS_NAMES_PT[field]} de '{old}' para '{new}'"
-            elif field == "cost":
-                old = format_currency(getattr(expense, field), 'BRL', '#,##0.00', locale='pt_BR')
-                new = format_currency(float(request.data.get(field).replace('.', "").replace(",", ".")), 'BRL', '#,##0.00', locale='pt_BR')
-                if old != new:
-                    changes[field_name_pt] = f"Mudou a(o) {FIELDS_NAMES_PT[field]} de R$ {old} para R$ {new}"
-            elif field == 'date':
-                if (old := str(getattr(expense, field))) != (new := request.data.get(field)):
-                    changes[
-                        field_name_pt] = f"Mudou a(o) {FIELDS_NAMES_PT[field]} de '{old[8:10]}/{old[5:7]}/{old[:4]}' para '{new[8:10]}/{new[5:7]}/{new[:4]}'"
-            elif field == 'items':
-                message = '\nDeletou os itens '
-                changes[field_name_pt] = ''
-                if len(items_to_delete_names):
-                    changes[field_name_pt] = message
-                    for item in items_to_delete_names:
-                        changes[field_name_pt] += f"{item}, "
-                    changes[field_name_pt] = changes[field_name_pt][:-2] + '.'
-                """message = '\nAtualizou os itens '
-                if len(items_to_update):
-                    changes[field] += message
-                    for item in items_to_update:
-                        changes[field] += f"{item['name']}, "
-                    changes[field] = changes[field][:-2] + '.'"""
-                message = '\nCriou os itens '
-                if len(items_to_create):
-                    changes[field_name_pt] += message
-                    for item in items_to_create:
-                        changes[field_name_pt] += f"{item['name']}, "
-                    changes[field_name_pt] = changes[field_name_pt][:-2] + '.'
-                if not changes[field_name_pt]:
-                    del changes[field_name_pt]
-            elif field == 'payments':
-                message = '\nDeletou os pagamentos '
-                changes[field_name_pt] = ''
-                if len(payments_to_delete_data):
-                    changes[field_name_pt] = message
-                    for payment in payments_to_delete_data:
-                        changes[field_name_pt] += f"{payment['payer__first_name']} R$ {format_currency(payment['value'], 'BRL', '#,##0.00', locale='pt_BR')}, "
-                    changes[field_name_pt] = changes[field_name_pt][:-2] + '.'
-                """message = '\nAtualizou os pagamentos '
-                if len(payments_to_update):
-                    changes[field] += message
-                    for payment in payments_to_update:
-                        changes[field] += f"{payment['payer_name']} - R$ {format_currency(payment['value'], 'BRL', '#,##0.00', locale='pt_BR')}, "
-                    changes[field] = changes[field][:-2] + '.'"""
-                message = '\nCriou os pagamentos '
-                if len(payments_to_create):
-                    changes[field_name_pt] += message
-                    for payment in payments_to_create:
-                        changes[field_name_pt] += f"{payment['payer_name']} R$ {format_currency(payment['value'], 'BRL', '#,##0.00', locale='pt_BR')}, "
-                    changes[field_name_pt] = changes[field_name_pt][:-2] + '.'
-                if not changes[field_name_pt]:
-                    del changes[field_name_pt]
-        ActionLog.objects.create(user=request.user, expense_group_id=expense.regarding.expense_group.id,
-                                 type=ActionLog.ActionTypes.UPDATE,
-                                 description=f"Atualizou a despesa {expense_data['name']}", changes_json=changes)
-        notification_data = {"title": "Despesa editada",
-                             "body": f"O membro {current_user_full_name} editou a despesa {expense.name} de valor R$ {format_currency(expense.cost, 'BRL', '#,##0.00', locale='pt_BR')}"}
-        members = expense_groups.get_members(expense.regarding.expense_group, request, exclude_current_user=True)
-        expense_groups.notify_members(members, notification_data)
-
-        return Response(expense_serializer.data, status=status.HTTP_200_OK, headers=headers)
-
+        response = super().partial_update(request, *args, **kwargs)
+        if response.status_code == status.HTTP_200_OK:
+            deleted_items = expenses.handle_items_edition(request.data.get("items"), expense)
+            deleted_payments = expenses.handle_payments_edition(request.data.get("payments"), expense)
+            if request.data.get("revalidate", False):
+                expenses.ask_validators_to_revalidate(request, expense)
+            expenses.notify_members_about_expense_update(request, expense)
+            action_logs.update_expense(request, expense, deleted_items, deleted_payments)
+        return response
 
 
 class TagViewSet(viewsets.ModelViewSet):
@@ -429,7 +221,6 @@ class TagViewSet(viewsets.ModelViewSet):
         return self.queryset
 
 
-
 class ItemViewSet(viewsets.ModelViewSet):
     queryset = Item.objects.all().select_related("expense", "expense__regarding", "expense__regarding__expense_group").prefetch_related("expense__validated_by", "expense__payments", "expense__payments__payment_method", "expense__payments__payer",  "consumers")
     serializer_class = ItemSerializerReader
@@ -438,7 +229,6 @@ class ItemViewSet(viewsets.ModelViewSet):
     def get_queryset(self):
         self.queryset = self.queryset.filter(expense__regarding__expense_group__in=self.request.user.expenses_groups.all())
         return self.queryset
-
 
 
 class UserViewSet(viewsets.ModelViewSet):
@@ -462,31 +252,15 @@ class UserViewSet(viewsets.ModelViewSet):
         return Response(serializer.data)
 
 
-
 class JoinGroup(views.APIView):
     permission_classes = [permissions.IsAuthenticated]
+
     @transaction.atomic
     def get(self, request, hash, format=None):
         try:
             group = ExpenseGroup.objects.get(hash_id=hash)
-            user = request.user
-            new_user_full_name = f"{user.first_name} {user.last_name}".strip()
-            if group not in user.expenses_groups.all():
-                for membership in group.memberships.all():
-                    notification = Notification.objects.create(
-                        title=f"Novo membro no grupo {group.name}",
-                        body=f"O usuário {new_user_full_name} entrou no grupo",
-                        user=membership.user,
-                    )
-                    push_notifications.send_notification(notification)
-                Membership.objects.create(group=group, user=user)
-                notification = Notification.objects.create(
-                    title=f"Bem vindo ao grupo {group.name}",
-                    body=f"Agora você já pode ver e criar despesas nesse grupo.",
-                    user=user,
-                )
-                push_notifications.send_notification(notification)
-
+            if group not in request.user.expenses_groups.all():
+                expense_groups.join_group_by_code(request, group)
             else:
                 return Response(status=status.HTTP_400_BAD_REQUEST, data={"detail": "Você já faz parte desse grupo"})
         except ExpenseGroup.DoesNotExist:
@@ -496,7 +270,6 @@ class JoinGroup(views.APIView):
             return Response(status=status.HTTP_500_INTERNAL_SERVER_ERROR, data={"detail": "Tivemos problemas ao adicioná-lo ao grupo. Tente novamente!"})
         else:
             return Response(status=status.HTTP_200_OK, data={"detail": "Você entrou no grupo!"})
-
 
 
 class NotificationViewSet(viewsets.ModelViewSet):
@@ -509,7 +282,6 @@ class NotificationViewSet(viewsets.ModelViewSet):
         return self.queryset.order_by("-created_at")
 
 
-
 class ValidationViewSet(viewsets.ModelViewSet):
     queryset = Validation.objects.all().select_related("expense", "expense__regarding","expense__regarding__expense_group", "validator", "validator__wallet").prefetch_related("expense__validated_by", "expense__created_by", "validator__wallet__payment_methods", "validator__wallet__payment_methods__payments")
     serializer_class = ValidationSerializerReader
@@ -518,7 +290,6 @@ class ValidationViewSet(viewsets.ModelViewSet):
     def get_queryset(self):
         self.queryset = self.queryset.filter(validator=self.request.user)
         return self.queryset.order_by("-created_at")
-
 
     def get_serializer_class(self):
         method = self.request.method
@@ -529,53 +300,15 @@ class ValidationViewSet(viewsets.ModelViewSet):
 
     @transaction.atomic
     def partial_update(self, request, pk=None, *args, **kwargs):
-        current_user_full_name = f"{request.user.first_name} {request.user.last_name}".strip()
-        print(request.data, pk)
         response = super().update(request, *args, **kwargs)
-        obj = Validation.objects.get(pk=pk)
-        expense_validations = Validation.objects.filter(expense=obj.expense)
-        expense_creator = obj.expense.created_by
-        if request.data.get("revalidate", False):
-            notification = Notification.objects.create(
-                title=f"Validação solicitada novamente",
-                body=f"{current_user_full_name} solicitou sua validação novamente. Você rejeitou a despesa com a seguinte nota: {obj.note}",
-                user=obj.validator,
-            )
-            obj.is_active=True
-            obj.validated_at=None
-            obj.note=""
-            obj.save()
-            push_notifications.send_notification(notification)
-        else:
-            if obj.validated_at:
-                notification = Notification.objects.create(
-                    title=f"{current_user_full_name} validou uma despesa",
-                    body=f"Está tudo certo com a despesa {obj.expense.name}",
-                    user=expense_creator,
-                )
+        if response.status_code == status.HTTP_200_OK:
+            validation = Validation.objects.get(pk=pk)
+            if request.data.get("revalidate", False):
+                validations.ask_for_revalidation(request, validation)
             else:
-                notification = Notification.objects.create(
-                    title=f"{current_user_full_name} rejeitou uma despesa",
-                    body=f"A despesa {obj.expense.name} foi rejeitada." + f"O motivo da rejeição foi {obj.note}" if obj.note else "",
-                    user=expense_creator,
-                )
-            push_notifications.send_notification(notification)
-            validated = expense_validations.filter(validated_at__isnull=False)
-            rejected = expense_validations.filter(validated_at__isnull=True, is_active=False)
-            if expense_validations.count() == validated.count():
-                obj.expense.validation_status = Expense.ValidationStatuses.VALIDATED
-            elif expense_validations.count() == rejected.count():
-                obj.expense.validation_status = Expense.ValidationStatuses.REJECTED
-            else:
-                obj.expense.validation_status = Expense.ValidationStatuses.AWAITING
-            obj.expense.save(update_fields=['validation_status'])
-            if obj.expense.validation_status == Expense.ValidationStatuses.VALIDATED:
-                notification = Notification.objects.create(
-                    title=f"Despesa validada",
-                    body=f"Todos as validações solicitadas para a despesa {obj.expense.name} foram aprovadas",
-                    user=expense_creator,
-                )
-                push_notifications.send_notification(notification)
+                validations.notify_creator_about_validation_change(request, validation)
+            validations.update_validation_status_and_notify_creator(validation.expense)
+            action_logs.update_validation(request, validation)
         return response
 
 
@@ -601,39 +334,12 @@ class GroupInvitationViewSet(viewsets.ModelViewSet):
 
     @transaction.atomic
     def partial_update(self, request, pk=None, *args, **kwargs):
-        print(request.data, pk)
-        obj = GroupInvitation.objects.get(pk=pk)
-        obj.status = request.data.get("status", obj.status)
-        obj.save(update_fields=['status'])
-        invited = f"{obj.invited.first_name + ' ' + obj.invited.last_name}".strip()
-        sent_by = f"{obj.sent_by.first_name + ' ' + obj.sent_by.last_name}".strip()
-        if obj.status == GroupInvitation.InvitationStatus.ACCEPTED:
-            ActionLog.objects.create(user=request.user, expense_group=obj.expense_group,
-                                     type=ActionLog.ActionTypes.UPDATE,
-                                     description=f"{invited} aceitou o convite de {sent_by}", changes_json={})
-            notification = Notification.objects.create(
-                title="Convite aceito",
-                body=f"{invited} aceitou o seu convite para se juntar ao grupo {obj.expense_group.name}",
-                user=obj.sent_by,
-            )
-            push_notifications.send_notification(notification)
-            for membership in obj.expense_group.memberships.all():
-                notification = Notification.objects.create(
-                    title=f"Novo membro no grupo {obj.expense_group.name}",
-                    body=f"O usuário {invited} entrou no grupo",
-                    user=membership.user,
-                )
-                push_notifications.send_notification(notification)
-            Membership.objects.create(group=obj.expense_group, user=request.user)
-
-        else:
-            notification = Notification.objects.create(
-                title="Convite rejeitado",
-                body=f"{invited} rejeitou o seu convite para se juntar ao grupo {obj.expense_group.name}",
-                user=obj.sent_by,
-            )
-            push_notifications.send_notification(notification)
-        return Response(data=GroupInvitationSerializer(obj).data, status=status.HTTP_200_OK)
+        response = super().update(request, *args, **kwargs)
+        invitation = GroupInvitation.objects.get(pk=pk)
+        if response.status_code == status.HTTP_200_OK:
+            expense_groups.handle_invitation_answer(request, invitation)
+            action_logs.update_invitation(request, invitation)
+        return Response(data=GroupInvitationSerializer(invitation).data, status=status.HTTP_200_OK)
 
 
 class Login(views.APIView):

@@ -1,7 +1,7 @@
 from core.models import GroupInvitation, Notification, ActionLog, User, Membership
 from core.services import push_notifications, expense_groups
 from core.serializers import UserSerializer
-
+from babel.numbers import format_currency
 
 FIELDS_NAMES_PT = {
     'start_date': 'data inicial',
@@ -88,3 +88,86 @@ def regarding_deletion(request, regarding):
     ActionLog.objects.create(user=request.user, expense_group_id=regarding.expense_group.id,
                              type=ActionLog.ActionTypes.DELETE,
                              description=f"Deletou a referência {regarding.name}")
+
+
+def update_validation(request, validation):
+    msg = f"Está tudo certo com a despesa {validation.expense.name}"
+    f"{request.user.full_name} validou uma despesa"
+    if not validation.validated_at:
+        msg = f"A despesa {validation.expense.name} foi rejeitada." + f"O motivo da rejeição foi {validation.note}" if validation.note else ""
+    ActionLog.objects.create(user=request.user, expense_group_id=validation.expense.regarding.expense_group.id,
+                             type=ActionLog.ActionTypes.UPDATE,
+                             description=msg)
+
+
+def update_invitation(request, invitation):
+    if invitation.status == GroupInvitation.InvitationStatus.ACCEPTED:
+        ActionLog.objects.create(user=request.user, expense_group=invitation.expense_group,
+                                 type=ActionLog.ActionTypes.UPDATE,
+                                 description=f"{invitation.invited.full_name} aceitou o convite de {invitation.sent_by.full_name}",
+                                 changes_json={}
+                                 )
+
+
+def batch_delete_expense(request, delete_by_groups):
+    log_description = 'Deletou várias despesas'
+    for group, deleted_expenses in delete_by_groups.items():
+        changes = {"despesas": deleted_expenses}
+        ActionLog.objects.create(user=request.user, expense_group_id=group, type=ActionLog.ActionTypes.DELETE,
+                                 description=log_description, changes_json=changes)
+
+
+def delete_expense(request, expense):
+    ActionLog.objects.create(user=request.user, expense_group_id=expense.regarding.expense_group.id,
+                             type=ActionLog.ActionTypes.DELETE,
+                             description=f"Deletou a despesa {expense.name} de valor R$ {format_currency(expense.cost, 'BRL', '#,##0.00', locale='pt_BR')}")
+
+
+def new_expense(request, expense):
+    ActionLog.objects.create(user=request.user, expense_group_id=expense.regarding.expense_group.id,
+                             type=ActionLog.ActionTypes.CREATE,
+                             description=f"Criou a despesa {expense.name} de valor R$ {format_currency(expense.cost, 'BRL', '#,##0.00', locale='pt_BR')}")
+
+
+def update_expense(request, expense, deleted_items=[], deleted_payments=[]):
+    changes = {'nome': [], "descrição": [], "valor": [], "data": [], "items": [], "pagamentos": []}
+    items_to_create = list(filter(lambda x: x.get("create", False), request.data.get("items")))
+    items_to_update = list(filter(lambda x: x.get("edited", False), request.data.get("items")))
+    payments_to_create = list(filter(lambda x: x.get("create", False), request.data.get("payments")))
+    payments_to_update = list(filter(lambda x: x.get("edited", False), request.data.get("payments")))
+    for field in request.data.keys():
+        if field == 'name':
+            if (old := getattr(expense, field)) != (new := request.data.get(field)):
+                changes["nome"].append(f"Mudou o nome de {old} para {new}")
+        elif field == 'description':
+            print(getattr(expense, field), request.data.get(field))
+            if (old := getattr(expense, field)) != (new := request.data.get(field)):
+                changes["descrição"].append(f"Mudou a descrição de {old} para {new}")
+        elif field == "cost":
+            old = format_currency(getattr(expense, field), 'BRL', '#,##0.00', locale='pt_BR')
+            new = format_currency(float(request.data.get(field)), 'BRL', '#,##0.00',
+                                  locale='pt_BR')
+            if old != new:
+                changes["valor"].append(f"Mudou o valor de R$ {old} para R$ {new}")
+        elif field == 'date':
+            if (old := str(getattr(expense, field))) != (new := request.data.get(field)):
+                changes["data"].append(f"Mudou a data de '{old[8:10]}/{old[5:7]}/{old[:4]}' para '{new[8:10]}/{new[5:7]}/{new[:4]}'")
+        elif field == 'items':
+            for item in items_to_create:
+                changes["items"].append(f"Criou o item {item.get('name')} R${format_currency(item.get('price'), 'BRL', '#,##0.00', locale='pt_BR')}")
+            for item in items_to_update:
+                changes["items"].append(f"Atualizou o item {item.get('name')} R${format_currency(item.get('price'), 'BRL', '#,##0.00', locale='pt_BR')}")
+            for item in deleted_items:
+                changes["items"].append(f"Deletou o item {item.get('name')} R${format_currency(item.get('price'), 'BRL', '#,##0.00', locale='pt_BR')}")
+        elif field == 'payments':
+            for payment in payments_to_create:
+                changes["pagamentos"].append(f"Criou o pagamento {payment['payer_name']} R${format_currency(payment['value'], 'BRL', '#,##0.00', locale='pt_BR')}")
+            for payment in payments_to_update:
+                changes["pagamentos"].append(f"Atualizou o pagamento {payment['payer_name']} R${format_currency(payment['value'], 'BRL', '#,##0.00', locale='pt_BR')}")
+            for payment in deleted_payments:
+                changes["pagamentos"].append(f"Deletou o pagamento {payment['payer__first_name']} R${format_currency(payment['value'], 'BRL', '#,##0.00', locale='pt_BR')}")
+
+    ActionLog.objects.create(user=request.user, expense_group_id=expense.regarding.expense_group.id,
+                             type=ActionLog.ActionTypes.UPDATE,
+                             description=f"Atualizou a despesa {expense.name}", changes_json=changes)
+    print(changes)

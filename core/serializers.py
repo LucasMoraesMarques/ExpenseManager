@@ -242,7 +242,7 @@ class PaymentSerializerReader(serializers.ModelSerializer):
     payer_name = serializers.SerializerMethodField()
     class Meta:
         model = Payment
-        exclude = ("created_at", "updated_at")
+        exclude = ("updated_at",)
         depth = 1
 
     def get_payer_name(self, obj):

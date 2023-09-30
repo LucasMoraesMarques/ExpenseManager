@@ -2,6 +2,7 @@ from core.models import Notification, GroupInvitation, User, Membership
 from core.services import push_notifications
 from datetime import datetime, timedelta
 
+
 def get_members(expense_group, request, exclude_current_user=False):
     members = expense_group.members.all()
     if exclude_current_user:
@@ -79,3 +80,46 @@ def update_memberships(request, group):
             membership.level = new_level
             membership.save(update_fields=['level'])
 
+
+def handle_invitation_accepted(request, invitation):
+    notification = Notification.objects.create(
+        title="Convite aceito",
+        body=f"{invitation.invited.full_name} aceitou o seu convite para se juntar ao grupo {invitation.expense_group.name}",
+        user=invitation.sent_by,
+    )
+    push_notifications.send_notification(notification)
+    members = get_members(invitation.expense_group, request, exclude_current_user=True)
+    notification_data = {"title": f"Novo membro no grupo {invitation.expense_group.name}",
+                         "body": f"O usuário {invitation.invited.full_name} entrou no grupo"}
+    notify_members(members, notification_data)
+    Membership.objects.create(group=invitation.expense_group, user=request.user)
+
+
+def handle_invitation_rejected(invitation):
+    notification = Notification.objects.create(
+        title="Convite rejeitado",
+        body=f"{invitation.invited.full_name} rejeitou o seu convite para se juntar ao grupo {invitation.expense_group.name}",
+        user=invitation.sent_by,
+    )
+    push_notifications.send_notification(notification)
+
+
+def handle_invitation_answer(request, invitation):
+    if invitation.status == GroupInvitation.InvitationStatus.ACCEPTED:
+        handle_invitation_accepted(request, invitation)
+    elif invitation.status == GroupInvitation.InvitationStatus.REJECTED:
+        handle_invitation_rejected(invitation)
+
+
+def join_group_by_code(request, group):
+    members = get_members(group, request, exclude_current_user=True)
+    notification_data = {"title": f"Novo membro no grupo {group.name}",
+                         "body": f"O usuário {request.user.full_name} entrou no grupo pelo código"}
+    notify_members(members, notification_data)
+    Membership.objects.create(group=group, user=request.user)
+    notification = Notification.objects.create(
+        title=f"Bem vindo ao grupo {group.name}",
+        body=f"Agora você já pode ver e criar despesas nesse grupo.",
+        user=request.user,
+    )
+    push_notifications.send_notification(notification)
