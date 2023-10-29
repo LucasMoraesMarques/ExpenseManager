@@ -12,7 +12,7 @@ from django.db.models import F, Q
 from knox.models import AuthToken
 from datetime import datetime, timedelta
 from django.db import transaction
-from core.services import push_notifications, expense_groups, action_logs, regardings, validations, expenses
+from core.services import push_notifications, expense_groups, action_logs, regardings, validations, expenses, google_drive
 
 FIELDS_NAMES_PT = {
     'name': 'nome',
@@ -190,6 +190,7 @@ class ExpenseViewSet(viewsets.ModelViewSet):
         response = super().create(request, *args, **kwargs)
         if response.status_code == status.HTTP_201_CREATED:
             expense = request.user.created_expenses.last()
+            expenses.upload_images(request.data.get("gallery"), expense)
             expenses.create_items_for_new_expense(request.data.get("items"), expense)
             expenses.create_payments_for_new_expense(request.data.get("payments"), expense)
             expenses.notify_expense_validators(request, expense)
@@ -206,6 +207,7 @@ class ExpenseViewSet(viewsets.ModelViewSet):
             deleted_payments = expenses.handle_payments_edition(request.data.get("payments"), expense)
             if request.data.get("revalidate", False):
                 expenses.ask_validators_to_revalidate(request, expense)
+            expenses.upload_images(request.data.get("gallery"), expense)
             expenses.notify_members_about_expense_update(request, expense)
             action_logs.update_expense(request, expense, deleted_items, deleted_payments)
         return response

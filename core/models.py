@@ -1,8 +1,10 @@
 from django.contrib.auth.models import AbstractUser
+from django.contrib.postgres.fields import ArrayField
 from django.db import models
 from datetime import datetime
 import hashlib
 from phonenumber_field.modelfields import PhoneNumberField
+from core.services import google_drive
 
 STATES = ['AC', 'AL', 'AP', 'AM', 'BA', 'CE', 'DF', 'ES', 'GO', 'MA', 'MT', 'MS', 'MG', 'PA',
     'PB', 'PR', 'PE', 'PI', 'RJ', 'RN', 'RS', 'RO', 'RR', 'SC', 'SP', 'SE', 'TO']
@@ -39,6 +41,7 @@ class ExpenseGroup(BaseModel):
     members = models.ManyToManyField("User", through="Membership", related_name="expenses_groups")
     is_active = models.BooleanField("Is active?", default=True)
     hash_id = models.CharField("Hash ID", max_length=16, blank=True, null=True)
+    drive_id = models.CharField("Drive ID", max_length=64, blank=True, null=True)
 
     def __str__(self):
         return self.name
@@ -46,6 +49,15 @@ class ExpenseGroup(BaseModel):
     def save(self, *args, **kwargs):
         if not self.hash_id:
             self.hash_id = hashlib.sha1(bytes(f"{self.name}-{self.description}-{self.pk}", encoding="utf-8")).hexdigest()[:16]
+        if not self.drive_id:
+            file = {
+                "metadata": {
+                    "name": self.name,
+                    "parents": ["1Kvwjfbf9khOFEn6D6wvwSDfkAw3oaG4W"]
+                },
+                "data": None
+            }
+            self.drive_id = google_drive.create_folder(file)
         super(ExpenseGroup, self).save(*args, **kwargs)
 
 
@@ -134,6 +146,7 @@ class Expense(BaseModel):
     validation_status = models.CharField("Validation Status", default=ValidationStatuses.AWAITING, max_length=128, choices=ValidationStatuses.choices)
     created_by = models.ForeignKey("User", related_name="created_expenses", on_delete=models.CASCADE, blank=True, null=True)
     payment_status = models.CharField("Payment Status", default=PaymentStatuses.AWAITING_VALIDATION, max_length=128, choices=PaymentStatuses.choices)
+    gallery = models.JSONField("Gallery", null=True, blank=True)
 
     def __str__(self):
         return f"{self.regarding.expense_group} - {self.regarding.name} - {self.name} - R${self.cost:.2f}"

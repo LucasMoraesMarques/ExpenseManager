@@ -4,7 +4,7 @@ from core.models import ExpenseGroup, Regarding, Wallet, PaymentMethod, Payment,
     User, Notification, Validation, ActionLog, Membership, GroupInvitation
 from datetime import datetime
 from django.db.models import Sum
-from core.services import stats
+from core.services import stats, google_drive
 from babel.numbers import format_decimal
 from decimal import Decimal
 import json

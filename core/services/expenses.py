@@ -1,7 +1,10 @@
 from core.models import Expense, ActionLog, Validation, Notification, Item, Payment
-from core.services import expense_groups, push_notifications, validations
+from core.services import expense_groups, push_notifications, validations, google_drive
 from babel.numbers import format_currency
 from core.serializers import ItemSerializerWriter, PaymentSerializerWriter
+import base64
+import io
+import re
 
 
 def batch_delete_expense(expenses_ids):
@@ -130,3 +133,49 @@ def ask_validators_to_revalidate(request, expense):
     expense.validations.update(is_active=True, validated_at=None, note="")
     for validation in expense.validations.all():
         validations.ask_for_revalidation(request, validation)
+
+
+def create_gallery(expense):
+    gallery_folder = {
+        "metadata":{
+            "name": f"{expense.regarding.name} - {expense.name}",
+        }
+    }
+    if expense.regarding.expense_group.drive_id:
+        drive_id = expense.regarding.expense_group.drive_id
+    else:
+        group_folder = {
+            "metadata": {
+                "name": expense.regarding.expense_group.name,
+                "parents": ["1Kvwjfbf9khOFEn6D6wvwSDfkAw3oaG4W"]
+            },
+            "data": None
+        }
+        drive_id = google_drive.create_folder(group_folder)
+        expense.regarding.expense_group.drive_id = drive_id
+        expense.regarding.expense_group.save(update_fields=["drive_id"])
+
+    gallery_folder["metadata"]["parents"] = [drive_id]
+    return google_drive.create_folder(gallery_folder)
+
+
+def upload_images(gallery, expense):
+    images_to_upload = []
+    old_images = []
+    if gallery:
+        images_to_upload = list(filter(lambda x: x.get("create", False), gallery.get("photos", [])))
+    if expense.gallery is not None:
+        gallery_id = expense.gallery.get("id", "")
+        old_images = list(filter(lambda x: not x.get("create", False), gallery.get("photos", [])))
+    else:
+        gallery_id = create_gallery(expense)
+    images_to_save = []
+    for image in images_to_upload:
+        file = {"metadata": {'name': 'image.png', "parents": [gallery_id]}, "data": io.BytesIO(base64.b64decode(re.sub("data:image/png;base64", '', image['src'])))}
+        file_id = google_drive.upload_media_file(file)
+
+        if file_id:
+            images_to_save.append({"id": file_id, "src": f"https://drive.google.com/uc?export=view&id={file_id}"})
+    new_gallery = {"id": gallery_id, "photos": old_images + images_to_save}
+    expense.gallery = new_gallery
+    expense.save(update_fields=["gallery"])
