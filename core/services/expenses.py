@@ -171,7 +171,8 @@ def upload_images(gallery, expense):
         gallery_id = create_gallery(expense)
     images_to_save = []
     for image in images_to_upload:
-        file = {"metadata": {'name': 'image.png', "parents": [gallery_id]}, "data": io.BytesIO(base64.b64decode(re.sub("data:image/png;base64", '', image['src'])))}
+        image_type = image['src'].split(';')[0].split('/')[1]
+        file = {"metadata": {'name': f'image.{image_type}', "parents": [gallery_id]}, "data": io.BytesIO(base64.b64decode(re.sub("data:image/png;base64", '', image['src']))), "mimetype": f"image/{image_type}"}
         file_id = google_drive.upload_media_file(file)
 
         if file_id:

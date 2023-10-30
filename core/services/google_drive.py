@@ -59,7 +59,7 @@ def upload_media_file(file):
     service = create_connection()
     try:
         media = MediaIoBaseUpload(file["data"],
-                                mimetype='image/png')
+                                mimetype=file["mimetype"])
         # pylint: disable=maybe-no-member
         file = service.files().create(body=file["metadata"], media_body=media,
                                       fields='id').execute()
