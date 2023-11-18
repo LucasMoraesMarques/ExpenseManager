@@ -179,3 +179,29 @@ sentry_sdk.init(
     traces_sample_rate=1.0,
     profiles_sample_rate=1.0,
 )
+
+GOOGLE_DRIVE_CLIENT_JSON = {
+  "installed": {
+    "client_id": config("GD_CLIENT_ID", default=""),
+    "project_id": config("GD_PROJECT_ID", default=""),
+    "auth_uri": "https://accounts.google.com/o/oauth2/auth",
+    "token_uri": "https://oauth2.googleapis.com/token",
+    "auth_provider_x509_cert_url": "https://www.googleapis.com/oauth2/v1/certs",
+    "client_secret": config("GD_CLIENT_SECRET", default=""),
+    "redirect_uris": [
+      "http://localhost"
+    ]
+  }
+}
+
+GOOGLE_DRIVE_TOKEN_JSON = {
+    "token": config("GD_TOKEN", default=""),
+    "refresh_token": config("GD_REFRESH_TOKEN", default=""),
+    "token_uri": "https://oauth2.googleapis.com/token",
+    "client_id": config("GD_CLIENT_ID", default=""),
+    "client_secret": config("GD_CLIENT_SECRET", default=""),
+    "scopes": ["https://www.googleapis.com/auth/drive"],
+    "expiry": config("GD_TOKEN_EXPIRY_AT", default=""),
+}
+
+GOOGLE_DRIVE_BASE_FOLDER_ID = config("GOOGLE_DRIVE_BASE_FOLDER_ID", default="")

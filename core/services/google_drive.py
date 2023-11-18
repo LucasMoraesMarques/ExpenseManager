@@ -1,37 +1,37 @@
 from __future__ import print_function
-
-import os.path
-
 from google.auth.transport.requests import Request
 from google.oauth2.credentials import Credentials
 from google_auth_oauthlib.flow import InstalledAppFlow
 from googleapiclient.discovery import build
 from googleapiclient.errors import HttpError
 from googleapiclient.http import MediaFileUpload, MediaIoBaseUpload
+from django.conf import settings
 
 # If modifying these scopes, delete the file token.json.
 SCOPES = ['https://www.googleapis.com/auth/drive']
 
 
-def create_connection():
+def get_new_token():
     creds = None
-    # The file token.json stores the user's access and refresh tokens, and is
-    # created automatically when the authorization flow completes for the first
-    # time.
-    if os.path.exists('token.json'):
-        creds = Credentials.from_authorized_user_file('token.json', SCOPES)
-    # If there are no (valid) credentials available, let the user log in.
+    creds = Credentials.from_authorized_user_info(settings.GOOGLE_DRIVE_TOKEN_JSON, SCOPES)
     if not creds or not creds.valid:
         if creds and creds.expired and creds.refresh_token:
             creds.refresh(Request())
-        else:
-            flow = InstalledAppFlow.from_client_secrets_file(
-                'client.json', SCOPES)
-            creds = flow.run_local_server(port=0)
         # Save the credentials for the next run
-        with open('token.json', 'w') as token:
+        with open('gd_client_secrets_token.json', 'w') as token:
             token.write(creds.to_json())
 
+
+def create_connection():
+    creds = None
+    creds = Credentials.from_authorized_user_info(settings.GOOGLE_DRIVE_TOKEN_JSON, SCOPES)
+    if not creds or not creds.valid:
+        if creds and creds.expired and creds.refresh_token:
+            raise Exception("Google Drive Login Expired")
+        else:
+            flow = InstalledAppFlow.from_client_config(
+                settings.GOOGLE_DRIVE_CLIENT_JSON, SCOPES)
+            creds = flow.run_local_server(port=0)
     service = build('drive', 'v3', credentials=creds)
     return service
 
@@ -40,7 +40,7 @@ def list_files():
     service = create_connection()
     try:
         # Call the Drive v3 API
-        results = service.files().list(q="'1Kvwjfbf9khOFEn6D6wvwSDfkAw3oaG4W' in parents",
+        results = service.files().list(q=f"'{settings.GOOGLE_DRIVE_BASE_FOLDER_ID}' in parents",
             pageSize=10, fields="nextPageToken, files(id, name)").execute()
         items = results.get('files', [])
 

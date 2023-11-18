@@ -5,7 +5,7 @@ from core.serializers import ItemSerializerWriter, PaymentSerializerWriter
 import base64
 import io
 import re
-
+from django.conf import settings
 
 def batch_delete_expense(expenses_ids):
     instances = Expense.objects.filter(id__in=expenses_ids).select_related("regarding__expense_group")
@@ -147,7 +147,7 @@ def create_gallery(expense):
         group_folder = {
             "metadata": {
                 "name": expense.regarding.expense_group.name,
-                "parents": ["1Kvwjfbf9khOFEn6D6wvwSDfkAw3oaG4W"]
+                "parents": [settings.GOOGLE_DRIVE_BASE_FOLDER_ID]
             },
             "data": None
         }

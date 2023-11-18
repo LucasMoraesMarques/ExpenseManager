@@ -185,3 +185,4 @@ fabric.properties
 # .idea
 __pycache__
 *.pyc
+gd_client_secrets_token.json
