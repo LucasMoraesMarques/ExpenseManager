@@ -1,3 +1,4 @@
+from django.utils import timezone
 from core.models import Expense, ActionLog, Validation, Notification, Item, Payment
 from core.services import expense_groups, push_notifications, validations, google_drive
 from babel.numbers import format_currency
@@ -6,6 +7,9 @@ import base64
 import io
 import re
 from django.conf import settings
+import pandas as pd
+from dateutil.relativedelta import relativedelta
+
 
 def batch_delete_expense(expenses_ids):
     instances = Expense.objects.filter(id__in=expenses_ids).select_related("regarding__expense_group")
@@ -180,3 +184,78 @@ def upload_images(gallery, expense):
     new_gallery = {"id": gallery_id, "photos": old_images + images_to_save}
     expense.gallery = new_gallery
     expense.save(update_fields=["gallery"])
+
+
+def update_expenses_validation_status(expenses):
+    for expense in expenses:
+        expense_validations = expense.validations.all()
+        validated = expense_validations.filter(validated_at__isnull=False)
+        rejected = expense_validations.filter(validated_at__isnull=True, is_active=False)
+        if expense_validations.count() == validated.count():
+            expense.validation_status = Expense.ValidationStatuses.VALIDATED
+        elif expense_validations.count() == rejected.count():
+            expense.validation_status = Expense.ValidationStatuses.REJECTED
+        else:
+            expense.validation_status = Expense.ValidationStatuses.AWAITING
+    Expense.objects.bulk_update(expenses, ['validation_status'], batch_size=2000)
+
+
+def update_expenses_payment_status(expenses):
+    for expense in expenses:
+        payments_statutes = list(expense.payments.values_list("payment_status", flat=True))
+        if Payment.PaymentStatuses.AWAITING_PAYMENT in payments_statutes:
+            expense.payment_status = Payment.PaymentStatuses.AWAITING_PAYMENT
+        elif payments_statutes.count(Payment.PaymentStatuses.PAID) == len(payments_statutes):
+            expense.payment_status = Payment.PaymentStatuses.PAID
+        else:
+            expense.payment_status = Payment.PaymentStatuses.AWAITING_VALIDATION
+    Expense.objects.bulk_update(expenses, ['payment_status'], batch_size=2000)
+
+
+def update_payments_payment_status(payments):
+    today = timezone.now().date()
+    validated_payments = payments.filter(
+        expense__validation_status=Expense.ValidationStatuses.VALIDATED
+    )
+    not_validated_payments = payments.exclude(
+        expense__validation_status=Expense.ValidationStatuses.VALIDATED
+    )
+    if validated_payments.count():
+        df = pd.DataFrame(
+            validated_payments.values(
+                "id",
+                "payment_method__type",
+                "payment_method__compensation_day",
+                "expense__date",
+            )
+        )
+        df.fillna(1, inplace=True)
+        df.astype({"payment_method__compensation_day": "int32"})
+        df["current_compensation_date"] = df["payment_method__compensation_day"].map(
+            lambda x: today + relativedelta(day=int(x))
+        )
+        print(df)
+        df["last_compensation_date"] = df["current_compensation_date"] + relativedelta(
+            months=-1
+        )
+        df["is_paid"] = df.apply(
+            lambda x: (x["payment_method__type"] in ["DEBIT", "CASH"])
+                      | (
+                              (
+                                      (
+                                              x["last_compensation_date"]
+                                              <= x["expense__date"]
+                                              <= x["current_compensation_date"]
+                                      )
+                                      | (x["expense__date"] < x["last_compensation_date"])
+                              )
+                              & (today >= x["current_compensation_date"])
+                      ),
+            axis=1,
+        )
+        payments_paid_ids = df[df["is_paid"]].loc[:, "id"].tolist()
+        payments_paid = validated_payments.filter(id__in=payments_paid_ids)
+        payments_not_paid = validated_payments.exclude(id__in=payments_paid_ids)
+        payments_paid.update(payment_status=Payment.PaymentStatuses.PAID)
+        payments_not_paid.update(payment_status=Payment.PaymentStatuses.AWAITING_PAYMENT)
+    not_validated_payments.update(payment_status=Payment.PaymentStatuses.AWAITING_VALIDATION)

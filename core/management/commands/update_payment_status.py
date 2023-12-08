@@ -1,7 +1,7 @@
 from django.core.management.base import BaseCommand
 from django.utils import timezone
 from core.models import Payment, Expense, PaymentMethod
-from django.db.models import Q, When, Case
+from core.services.expenses import update_expenses_payment_status, update_payments_payment_status
 
 
 class Command(BaseCommand):
@@ -9,30 +9,20 @@ class Command(BaseCommand):
 
     def __init__(self, *args, **kwargs):
         super().__init__(*args, **kwargs)
-        self.today = timezone.now().date()
 
     def handle(self, *args, **options):
         payments = self.get_payments()
-        self.update_payments(payments)
+        expenses = self.get_expenses()
+        update_expenses_payment_status(expenses)
+        update_payments_payment_status(payments)
 
     def get_payments(self):
         payments = Payment.objects.select_related("payment_method", "expense")
-        payments = payments.exclude(payment_status__in=[Payment.PaymentStatuses.PAID])
+        payments = payments.exclude(payment_status=Payment.PaymentStatuses.PAID)
         return payments
 
-    def update_payments(self, payments):
-        validated_payments = payments.filter(expense__validation_status=Expense.ValidationStatuses.VALIDATED)
-        validated_payments = validated_payments.annotate(is_paid=Case(
-            When(
-                payment_method__type__in=[PaymentMethod.Types.CASH, PaymentMethod.Types.DEBIT_CARD],
-                then=True,
-            ),
-            When(
-                Q(payment_method__type__in=PaymentMethod.Types.CREDIT_CARD) & Q(payment_method__compensation_day__gte=self.today.day),
-                then=True,
-            ),
-            default=False,
-        ))
-        payments_paid = validated_payments.filter(is_paid=True)
-        print(f"{payments_paid.count()} payments changed to PAID")
-        payments_paid.update(payment_status=Payment.PaymentStatuses.PAID)
+    def get_expenses(self):
+        expenses = Expense.objects.prefetch_related("payments")
+        expenses = expenses.exclude(payment_status=Payment.PaymentStatuses.PAID)
+        return expenses
+

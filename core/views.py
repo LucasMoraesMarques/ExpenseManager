@@ -192,8 +192,11 @@ class ExpenseViewSet(viewsets.ModelViewSet):
             expense = request.user.created_expenses.last()
             expenses.upload_images(request.data.get("gallery"), expense)
             expenses.create_items_for_new_expense(request.data.get("items"), expense)
-            expenses.create_payments_for_new_expense(request.data.get("payments"), expense)
             expenses.notify_expense_validators(request, expense)
+            expenses.create_payments_for_new_expense(request.data.get("payments"), expense)
+            expenses.update_expenses_validation_status([expense])
+            expenses.update_expenses_payment_status([expense])
+            expenses.update_payments_payment_status(expense.payments.all())
             expenses.notify_members_about_new_expense(request,expense)
             action_logs.new_expense(request, expense)
         return response
@@ -203,10 +206,13 @@ class ExpenseViewSet(viewsets.ModelViewSet):
         expense = Expense.objects.get(id=pk)
         response = super().partial_update(request, *args, **kwargs)
         if response.status_code == status.HTTP_200_OK:
-            deleted_items = expenses.handle_items_edition(request.data.get("items"), expense)
-            deleted_payments = expenses.handle_payments_edition(request.data.get("payments"), expense)
             if request.data.get("revalidate", False):
                 expenses.ask_validators_to_revalidate(request, expense)
+            deleted_items = expenses.handle_items_edition(request.data.get("items"), expense)
+            deleted_payments = expenses.handle_payments_edition(request.data.get("payments"), expense)
+            expenses.update_expenses_validation_status([expense])
+            expenses.update_expenses_payment_status([expense])
+            expenses.update_payments_payment_status(expense.payments.all())
             expenses.upload_images(request.data.get("gallery"), expense)
             expenses.notify_members_about_expense_update(request, expense)
             action_logs.update_expense(request, expense, deleted_items, deleted_payments)
@@ -310,6 +316,8 @@ class ValidationViewSet(viewsets.ModelViewSet):
             else:
                 validations.notify_creator_about_validation_change(request, validation)
             validations.update_validation_status_and_notify_creator(validation.expense)
+            expenses.update_payments_payment_status(validation.expense.payments.all())
+            expenses.update_expenses_payment_status([validation.expense])
             action_logs.update_validation(request, validation)
         return response
 
