@@ -27,7 +27,10 @@ def create_connection():
     creds = Credentials.from_authorized_user_info(settings.GOOGLE_DRIVE_TOKEN_JSON, SCOPES)
     if not creds or not creds.valid:
         if creds and creds.expired and creds.refresh_token:
-            raise Exception("Google Drive Login Expired")
+            creds.refresh(Request())
+            # Save the credentials for the next run
+            with open('gd_client_secrets_token.json', 'w') as token:
+                token.write(creds.to_json())
         else:
             flow = InstalledAppFlow.from_client_config(
                 settings.GOOGLE_DRIVE_CLIENT_JSON, SCOPES)
